@@ -48,6 +48,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The whole history every time (the gitleaks action scans "first commit^..last", which fails
+      # when the push includes the repository's first commit).
+      - name: Scan every commit for secrets
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            ghcr.io/gitleaks/gitleaks:latest git /repo --redact --verbose

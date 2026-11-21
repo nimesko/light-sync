@@ -1,0 +1,20 @@
+[package]
+name = "lightsyncd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+lightsync-core = { path = "../lightsync-core" }
+lightsync-openrgb = { path = "../lightsync-openrgb" }
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rustfft = "6.4.1"
+
+[target."cfg(windows)".dependencies]
+cpal = "0.18.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }

@@ -1,0 +1,413 @@
+<Window
+    x:Class="LightSync.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:LightSync.App"
+    Title="LightSync">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="RootGrid">
+        <Grid.Resources>
+            <Style x:Key="CardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="20" />
+            </Style>
+            <!-- Windows App SDK 1.6 has no built-in SubtleButtonStyle; a borderless, transparent button. -->
+            <Style x:Key="SubtleButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+            </Style>
+            <Style x:Key="TargetItemStyle" TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                <Setter Property="Padding" Value="8,2" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            </Style>
+            <DataTemplate x:Key="TargetTemplate" x:DataType="local:TargetItem">
+                <Grid ColumnSpacing="10" Margin="{x:Bind Indent}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="{x:Bind IconSize}" Height="{x:Bind IconSize}" CornerRadius="6" Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                        <FontIcon Glyph="{x:Bind Glyph}" FontSize="{x:Bind GlyphSize}" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{x:Bind Title}" Style="{StaticResource BodyStrongTextBlockStyle}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{x:Bind Subtitle}" Style="{StaticResource CaptionTextBlockStyle}" TextTrimming="CharacterEllipsis"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                                Visibility="{x:Bind StateVisibility, Mode=OneWay}" ToolTipService.ToolTip="{x:Bind StateTip, Mode=OneWay}">
+                        <TextBlock Text="{x:Bind StateText, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" MaxWidth="96" TextTrimming="CharacterEllipsis" />
+                        <Border Width="16" Height="16" CornerRadius="8" Background="{x:Bind StateBrush, Mode=OneWay}"
+                                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1" />
+                    </StackPanel>
+                    <!-- Hide a device: it leaves the list and the preview, and LightSync stops controlling it -->
+                    <Button Grid.Column="3" Click="RowHide_Click" Visibility="{x:Bind HideVisibility}" Style="{StaticResource SubtleButtonStyle}"
+                            Padding="6" Margin="-4,0,-6,0" VerticalAlignment="Center" Opacity="0.7"
+                            ToolTipService.ToolTip="Hide (Settings &gt; Devices shows it again)" AutomationProperties.Name="Hide">
+                        <FontIcon Glyph="&#xED1A;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </Button>
+                </Grid>
+            </DataTemplate>
+            <Style x:Key="SectionLabel" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
+                <Setter Property="Margin" Value="0,0,0,12" />
+            </Style>
+        </Grid.Resources>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="36" />
+        </Grid.RowDefinitions>
+
+        <!-- Custom title bar with the menu. Only DragRegion moves the window, so the menu stays clickable.
+             Shortcuts (F5, Ctrl+Q, Ctrl+S, Ctrl+L, Ctrl+G) are registered on RootGrid in code, so they work
+             whether or not a menu was opened; the menu items only show them. -->
+        <Grid x:Name="AppTitleBar" Padding="12,0,140,0" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Image x:Name="TitleIcon" Width="18" Height="18" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="LightSync" Style="{StaticResource CaptionTextBlockStyle}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,4,0" />
+            <MenuBar x:Name="MainMenu" Grid.Column="2" VerticalAlignment="Center">
+                <MenuBarItem Title="File">
+                    <MenuFlyoutItem Text="Rescan devices" Click="Rescan_Click" KeyboardAcceleratorTextOverride="F5">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE72C;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="Start fresh..." Click="StartFresh_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE777;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutSubItem x:Name="ProfilesMenu" Text="Presets">
+                        <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE790;" /></MenuFlyoutSubItem.Icon>
+                    </MenuFlyoutSubItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Text="Hide to tray" Click="HideToTray_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE921;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="Exit" Click="Exit_Click" KeyboardAcceleratorTextOverride="Ctrl+Q" />
+                </MenuBarItem>
+                <MenuBarItem Title="Settings">
+                    <MenuFlyoutItem Text="General..." Click="SettingsGeneral_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="Power..." Click="SettingsPower_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7E8;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="OpenRGB..." Click="SettingsOpenRgb_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE950;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="Devices..." Click="SettingsDevices_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE772;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuBarItem>
+                <MenuBarItem Title="Help">
+                    <MenuFlyoutItem Text="About LightSync" Click="About_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE946;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Text="Open settings folder" Click="SettingsFolder_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE838;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="Open OpenRGB folder" Click="OpenRgbFolder_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE838;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Text="Check for OpenRGB updates" Click="OpenRgbCheck_Click">
+                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE896;" /></MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuBarItem>
+            </MenuBar>
+            <Border x:Name="DragRegion" Grid.Column="3" Background="Transparent" />
+        </Grid>
+
+        <!-- Status bar: connection status, devices, current preset; lights and OpenRGB on / off on the right -->
+        <Border Grid.Row="3" Padding="16,0,12,0" BorderThickness="0,1,0,0"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel x:Name="StatusPill" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"
+                            ToolTipService.ToolTip="Connection to the lighting service and OpenRGB">
+                    <Ellipse x:Name="StatusDot" Width="8" Height="8" VerticalAlignment="Center" Fill="{ThemeResource SystemFillColorCautionBrush}" />
+                    <TextBlock x:Name="StatusText" Text="Starting..." Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="6" ToolTipService.ToolTip="Devices LightSync controls (hidden ones not counted)">
+                        <FontIcon Glyph="&#xE772;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="FooterDevices" Text="No devices" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" ToolTipService.ToolTip="The preset loaded last (File &gt; Presets); Custom once you change something">
+                        <FontIcon Glyph="&#xE790;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="FooterPreset" Text="Preset: Custom" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <ToggleButton x:Name="LightsButton" Click="LightsButton_Click" Padding="10,3" IsChecked="True"
+                                  ToolTipService.ToolTip="Stop or start all lights (Ctrl+L)" AutomationProperties.Name="All lights on or off">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon x:Name="LightsIcon" Glyph="&#xE769;" FontSize="11" />
+                            <TextBlock x:Name="LightsText" Text="Stop lights" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="OpenRgbButton" Click="OpenRgbToggle_Click" Padding="10,3" ToolTipService.ToolTip="Start or stop OpenRGB, which LightSync uses to reach your devices" AutomationProperties.Name="OpenRGB on or off">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Ellipse x:Name="OpenRgbDot" Width="8" Height="8" VerticalAlignment="Center" Fill="{ThemeResource SystemFillColorCautionBrush}" />
+                            <TextBlock x:Name="OpenRgbText" Text="OpenRGB" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ToggleButton>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <InfoBar x:Name="Notice" Grid.Row="1" Margin="16,0,16,8" IsOpen="False" IsClosable="True">
+            <InfoBar.ActionButton>
+                <Button x:Name="NoticeAction" Visibility="Collapsed" Click="NoticeAction_Click" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
+        <Grid Grid.Row="2" Padding="16,0,16,16" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="340" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="300" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left, full height: Home, then the devices (groups, all devices, each device with its zones and fans) -->
+            <Grid RowSpacing="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Button x:Name="HomeButton" Click="Home_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="14,10"
+                        ToolTipService.ToolTip="Overview of your setup (Esc)" AutomationProperties.Name="Home">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <FontIcon Glyph="&#xE80F;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <TextBlock Text="Home" Style="{StaticResource BodyStrongTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="12,16,12,12">
+                <Grid RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Padding="8,0,0,0">
+                        <TextBlock Text="Devices" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="2">
+                            <Button Click="NewGroup_Click" Style="{StaticResource SubtleButtonStyle}" Padding="8"
+                                    ToolTipService.ToolTip="New group (Ctrl+G)" AutomationProperties.Name="New group">
+                                <FontIcon Glyph="&#xE902;" FontSize="16" />
+                            </Button>
+                            <Button x:Name="RescanButton" Click="Rescan_Click" Style="{StaticResource SubtleButtonStyle}" Padding="8"
+                                    ToolTipService.ToolTip="Rescan devices (F5)" AutomationProperties.Name="Rescan devices">
+                                <FontIcon Glyph="&#xE72C;" FontSize="16" />
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Right padding keeps the scrollbar off the rows. Grouped (Groups / Devices) once groups exist. -->
+                    <ListView x:Name="TargetList" Grid.Row="1" SelectionMode="Single" SelectionChanged="TargetList_SelectionChanged" Padding="0,0,14,0"
+                              ContextRequested="TargetList_ContextRequested"
+                              ItemTemplate="{StaticResource TargetTemplate}" ItemContainerStyle="{StaticResource TargetItemStyle}">
+                        <ListView.GroupStyle>
+                            <GroupStyle HidesIfEmpty="True">
+                                <GroupStyle.HeaderTemplate>
+                                    <DataTemplate x:DataType="local:TargetSection">
+                                        <TextBlock Text="{x:Bind Title}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </DataTemplate>
+                                </GroupStyle.HeaderTemplate>
+                            </GroupStyle>
+                        </ListView.GroupStyle>
+                    </ListView>
+
+                    <StackPanel x:Name="EmptyState" Grid.Row="1" Spacing="12" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
+                        <FontIcon Glyph="&#xE82F;" FontSize="40" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        <TextBlock x:Name="EmptyText" Text="No devices yet" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="260"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button x:Name="EmptyButton" Content="Start OpenRGB" HorizontalAlignment="Center" Click="StartOpenRgb_Click" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+            </Grid>
+
+            <!-- Right, full height: the triggers by name, in priority order; clicking one opens its configuration in the middle -->
+            <Border Grid.Column="2" Style="{StaticResource CardStyle}" Padding="12,16,12,12">
+                <Grid RowSpacing="6">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Padding="8,0,0,0">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Text="Triggers" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                            <Border CornerRadius="10" Padding="8,1" VerticalAlignment="Center" Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                                <TextBlock x:Name="TriggerCount" Text="0" Style="{StaticResource CaptionTextBlockStyle}" />
+                            </Border>
+                        </StackPanel>
+                        <Button Click="AddTrigger_Click" Style="{StaticResource SubtleButtonStyle}" Padding="8" HorizontalAlignment="Right"
+                                ToolTipService.ToolTip="New trigger" AutomationProperties.Name="New trigger">
+                            <FontIcon Glyph="&#xE710;" FontSize="16" />
+                        </Button>
+                    </Grid>
+                    <ListView x:Name="TriggerList" Grid.Row="1" SelectionMode="Single" SelectionChanged="TriggerList_SelectionChanged" Padding="0,0,14,0"
+                              ItemContainerStyle="{StaticResource TargetItemStyle}" />
+                    <TextBlock x:Name="TriggerEmpty" Grid.Row="1" Margin="8,4,8,6" TextWrapping="Wrap" VerticalAlignment="Top" Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="No triggers yet. Add one with + to flash on a key press, ripple on a click or pulse with the beat." />
+                </Grid>
+            </Border>
+
+            <!-- Preview on top, then the selected device's lighting. Every change applies immediately. -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="16">
+                    <!-- A schematic of the setup with live colors; click a part to select it, Shift+click to add it -->
+                    <Border x:Name="PreviewCard" Style="{StaticResource CardStyle}" Padding="16,10,16,12">
+                        <StackPanel Spacing="10">
+                            <Grid>
+                                <TextBlock Text="Preview" Style="{StaticResource BodyStrongTextBlockStyle}" VerticalAlignment="Center" Margin="4,0,0,0" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                                    <Button x:Name="ResetLayoutButton" Visibility="Collapsed" Padding="8,4" VerticalAlignment="Center"
+                                            ToolTipService.ToolTip="Put every part back in its default place">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon Glyph="&#xE777;" FontSize="12" />
+                                            <TextBlock Text="Reset layout" Style="{StaticResource CaptionTextBlockStyle}" />
+                                        </StackPanel>
+                                        <Button.Flyout>
+                                            <Flyout x:Name="ResetLayoutFlyout">
+                                                <StackPanel Spacing="12" MaxWidth="260">
+                                                    <TextBlock TextWrapping="Wrap" Text="Move every part, the case and the desk back to their default places? The types you set stay." />
+                                                    <Button Content="Reset layout" Click="ResetLayout_Click" Style="{StaticResource AccentButtonStyle}" />
+                                                </StackPanel>
+                                            </Flyout>
+                                        </Button.Flyout>
+                                    </Button>
+                                    <ToggleButton x:Name="ArrangeToggle" Click="ArrangeToggle_Click" Padding="8,4" VerticalAlignment="Center"
+                                                  ToolTipService.ToolTip="Arrange: move and turn parts (and the case and desk) to where they are, line them up, and right-click a part to set what it is"
+                                                  AutomationProperties.Name="Arrange the preview">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon Glyph="&#xE7C2;" FontSize="12" />
+                                            <TextBlock Text="Arrange" Style="{StaticResource CaptionTextBlockStyle}" />
+                                        </StackPanel>
+                                    </ToggleButton>
+                                </StackPanel>
+                            </Grid>
+                            <!-- The 3D preview (a local page in a WebView2, created when first shown) -->
+                            <Grid x:Name="PreviewScroller">
+                                <Grid x:Name="PreviewHost" Height="500" CornerRadius="6" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Below the preview, one of three views: Home (overview), a trigger's configuration, or the selected device's lighting -->
+                    <StackPanel x:Name="HomePane" Spacing="16" />
+                    <StackPanel x:Name="TriggerPane" Spacing="16" Visibility="Collapsed" />
+
+                    <StackPanel x:Name="DevicePane" Spacing="16" Visibility="Collapsed">
+                    <!-- Selected device / zone / fan / group (or several, picked with Shift+click in the preview) -->
+                    <Border Style="{StaticResource CardStyle}" Padding="20,14,20,14">
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="0" VerticalAlignment="Center">
+                                <TextBlock x:Name="TargetTitle" Text="All devices" Style="{StaticResource SubtitleTextBlockStyle}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="TargetHint" TextTrimming="CharacterEllipsis" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Button x:Name="FansButton" Content="Split into fans" Visibility="Collapsed" Click="Fans_Click" />
+                                <Button x:Name="EditGroupButton" Content="Edit group" Visibility="Collapsed" Click="EditGroup_Click" />
+                                <Button x:Name="DeleteGroupButton" Visibility="Collapsed" Click="DeleteGroup_Click" ToolTipService.ToolTip="Delete group">
+                                    <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock Text="Effect" Style="{StaticResource SectionLabel}" />
+                            <!-- One titled row of tiles per effect family (filled in code) -->
+                            <StackPanel x:Name="EffectTiles" Spacing="6" />
+                            <!-- Effects that react to what the PC plays; the analyzer shows what they hear -->
+                            <TextBlock Text="Sound" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,16,0,2" />
+                            <TextBlock Text="React to what your PC plays. LightSync only listens while one of these is shown."
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" Margin="0,0,0,10" />
+                            <VariableSizedWrapGrid x:Name="SoundTiles" Orientation="Horizontal" ItemWidth="116" ItemHeight="80" />
+                            <Border x:Name="AnalyzerHost" Visibility="Collapsed" Margin="0,12,0,0" Padding="12" CornerRadius="6"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="ColorCard" Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,12">
+                                <TextBlock Text="Color" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                    <Border x:Name="Swatch" Width="20" Height="20" CornerRadius="10" BorderThickness="1"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" Background="White" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="HexText" Text="#FFFFFF" FontFamily="Consolas" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                            </Grid>
+                            <VariableSizedWrapGrid x:Name="Presets" Orientation="Horizontal" ItemWidth="48" ItemHeight="48" />
+                            <TextBlock x:Name="ColorHint" Text="This effect uses its own colors." Margin="0,8,0,0" Visibility="Collapsed"
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel Spacing="8">
+                            <Grid>
+                                <TextBlock Text="Brightness" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="BrightnessValue" Text="100%" HorizontalAlignment="Right" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Grid>
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xE706;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="100" StepFrequency="1"
+                                        ValueChanged="Brightness_ValueChanged" />
+                                <FontIcon Grid.Column="2" Glyph="&#xE706;" FontSize="18" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Grid>
+
+                            <StackPanel x:Name="SpeedPanel" Spacing="8" Margin="0,8,0,0" Visibility="Collapsed">
+                                <Grid>
+                                    <TextBlock x:Name="SpeedLabel" Text="Speed" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                    <TextBlock x:Name="SpeedValue" Text="50%" HorizontalAlignment="Right" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Grid>
+                                <Slider x:Name="SpeedSlider" Minimum="1" Maximum="100" Value="50" StepFrequency="1" ValueChanged="Speed_ValueChanged" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

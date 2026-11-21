@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-iappRSGaYmGbU+iNmsJ5teYDqM/22V2OW3B2sEfXSmU='; style-src 'self'; img-src 'self' data: blob:; connect-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LightSync preview</title>
+<link rel="stylesheet" href="preview.css">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js"}}</script>
+<script type="module" src="preview.js"></script>
+</head>
+<body class="dark">
+<div id="app">
+  <div id="stage">
+    <canvas id="view" tabindex="0" aria-label="3D preview of your setup"></canvas>
+    <div id="views" class="bar" role="toolbar" aria-label="Camera">
+      <button data-action="view" data-view="front" title="Look at the case from the front (1)">Front</button>
+      <button data-action="view" data-view="top" title="Look down on the case (2)">Top</button>
+      <button data-action="view" data-view="side" title="Look through the side window (3)">Side</button>
+      <button data-action="view" data-view="iso" title="The whole setup from the front-left at 45 degrees (4)">45&deg;</button>
+      <button data-action="view" data-view="reset" title="Back to the default view (Home)">Reset view</button>
+    </div>
+    <div id="empty" hidden>No devices to show yet.</div>
+    <div id="tip" hidden></div>
+    <div id="hint"></div>
+  </div>
+  <aside id="panel" hidden aria-label="Arrange tools">
+    <div id="selName" class="sel"></div>
+
+    <section>
+      <h3>Tool</h3>
+      <div class="row">
+        <button id="btnMove" data-action="mode" data-mode="translate" title="Move with the arrows (M)">Move</button>
+        <button id="btnRotate" data-action="mode" data-mode="rotate" title="Rotate with the rings (R)">Rotate</button>
+        <button id="btnSpace" data-action="space" title="Move along the world's axes or the part's own">World axes</button>
+      </div>
+      <div class="row">
+        <button id="btnUndo" data-action="undo" title="Undo (Ctrl+Z)">Undo</button>
+        <button id="btnRedo" data-action="redo" title="Redo (Ctrl+Y)">Redo</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Position (mm)</h3>
+      <div class="xyz">
+        <label><span class="ax x">X</span><input id="px" type="number" step="1"></label>
+        <label><span class="ax y">Y</span><input id="py" type="number" step="1"></label>
+        <label><span class="ax z">Z</span><input id="pz" type="number" step="1"></label>
+      </div>
+    </section>
+
+    <section>
+      <h3>Rotation (degrees)</h3>
+      <div class="xyz">
+        <label><span class="ax x">X</span><input id="rx" type="number" step="1"></label>
+        <label><span class="ax y">Y</span><input id="ry" type="number" step="1"></label>
+        <label><span class="ax z">Z</span><input id="rz" type="number" step="1"></label>
+      </div>
+      <div class="grid2">
+        <button data-action="rot" data-axis="x" data-deg="-90" data-need="1">X &minus;90&deg;</button>
+        <button data-action="rot" data-axis="x" data-deg="90" data-need="1">X +90&deg;</button>
+        <button data-action="rot" data-axis="y" data-deg="-90" data-need="1">Y &minus;90&deg;</button>
+        <button data-action="rot" data-axis="y" data-deg="90" data-need="1">Y +90&deg;</button>
+        <button data-action="rot" data-axis="z" data-deg="-90" data-need="1">Z &minus;90&deg;</button>
+        <button data-action="rot" data-axis="z" data-deg="90" data-need="1">Z +90&deg;</button>
+      </div>
+      <button class="wide" data-action="samerot" data-need="2" title="Turn every selected part like the one with the gizmo">Make same rotation</button>
+    </section>
+
+    <section>
+      <h3>Snap</h3>
+      <label class="check"><input id="gridOn" type="checkbox"> Grid <input id="gridSize" type="number" min="1" max="500" step="1" aria-label="Grid size in millimetres"> mm</label>
+      <label class="check"><input id="snapParts" type="checkbox"> To other parts and case slots</label>
+    </section>
+
+    <section>
+      <h3>Align</h3>
+      <div class="grid3">
+        <button data-action="align" data-side="left" data-need="1" title="Line up left edges (one part: against the case or desk)">Left</button>
+        <button data-action="align" data-side="right" data-need="1">Right</button>
+        <button data-action="align" data-side="top" data-need="1">Top</button>
+        <button data-action="align" data-side="bottom" data-need="1">Bottom</button>
+        <button data-action="align" data-side="front" data-need="1">Front</button>
+        <button data-action="align" data-side="back" data-need="1">Back</button>
+        <button data-action="center" data-axis="x" data-need="1" title="Centre on the X axis">Centre X</button>
+        <button data-action="center" data-axis="y" data-need="1" title="Centre on the Y axis">Centre Y</button>
+        <button data-action="center" data-axis="z" data-need="1" title="Centre on the Z axis">Centre Z</button>
+        <button data-action="dist" data-axis="x" data-need="3" title="Space three or more parts evenly along X">Spread X</button>
+        <button data-action="dist" data-axis="y" data-need="3" title="Space three or more parts evenly along Y">Spread Y</button>
+        <button data-action="dist" data-axis="z" data-need="3" title="Space three or more parts evenly along Z">Spread Z</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Put on a case face</h3>
+      <div class="grid3">
+        <button data-action="face" data-face="front">Front</button>
+        <button data-action="face" data-face="top">Top</button>
+        <button data-action="face" data-face="bottom">Bottom</button>
+        <button data-action="face" data-face="rear">Rear</button>
+        <button data-action="face" data-face="side">Side</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Case size (mm)</h3>
+      <div class="xyz">
+        <label><span class="ax">W</span><input id="cw" type="number" min="150" max="1200" step="1" aria-label="Case width"></label>
+        <label><span class="ax">H</span><input id="ch" type="number" min="150" max="1200" step="1" aria-label="Case height"></label>
+        <label><span class="ax">D</span><input id="cd" type="number" min="150" max="1200" step="1" aria-label="Case depth"></label>
+      </div>
+    </section>
+
+    <p class="keys">M / R: move or rotate. X, Y, Z: lock to one axis (also while dragging). Arrows, PgUp, PgDn: nudge (Shift: 10x). Esc: deselect. Ctrl+Z / Ctrl+Y: undo / redo. 1-4, Home: views.</p>
+  </aside>
+</div>
+</body>
+</html>

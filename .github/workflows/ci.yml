@@ -33,10 +33,10 @@ jobs:
       - name: Build the service (release)
         run: cargo build -p lightsyncd --release --locked
 
-      - name: .NET 8 SDK
+      - name: .NET 10 SDK
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Build the app
         run: dotnet build ui/LightSync.App -c Release

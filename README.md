@@ -38,7 +38,7 @@ To **run**:
 
 To **build**:
 - [Rust](https://rustup.rs) (stable, MSVC)
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Visual Studio Build Tools with "Desktop development with C++"
 
 ```powershell

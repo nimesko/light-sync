@@ -3,8 +3,10 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
+license = "MIT"
+authors = ["Rogerio Tristao Junior"]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -13,4 +15,11 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tracing = "0.1"
+
+# The app runs the debug build of lightsyncd during development: optimize it anyway (the render loop,
+# FFT and effects run up to 60 times a second); debug info and checks stay.
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3

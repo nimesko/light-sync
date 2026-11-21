@@ -1,4 +1,32 @@
+# Rust build output
 /target
-*.exe
-/dist
+
+# Downloaded third-party programs (OpenRGB, PawnIO): fetched, never committed
 /vendor
+
+# Release packages
+/dist
+
+# .NET / WinUI build output
+/ui/**/bin
+/ui/**/obj
+*.exe
+
+# Visual Studio / Rider / VS Code local state
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userprefs
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Personal working notes (kept on this PC, not published)
+/notes/

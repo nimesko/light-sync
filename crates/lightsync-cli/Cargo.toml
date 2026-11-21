@@ -1,0 +1,15 @@
+[package]
+name = "lightsync-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "lightsync"
+path = "src/main.rs"
+
+[dependencies]
+lightsync-core = { path = "../lightsync-core" }
+lightsync-openrgb = { path = "../lightsync-openrgb" }
+lightsync-razer = { path = "../lightsync-razer" }
+anyhow.workspace = true
+tokio.workspace = true

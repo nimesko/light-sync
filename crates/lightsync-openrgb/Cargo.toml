@@ -1,0 +1,11 @@
+[package]
+name = "lightsync-openrgb"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lightsync-core = { path = "../lightsync-core" }
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true

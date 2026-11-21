@@ -1,0 +1,23 @@
+# Weekly pull requests for outdated or vulnerable dependencies.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: nuget
+    directory: /ui/LightSync.App
+    schedule:
+      interval: weekly
+    groups:
+      nuget-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

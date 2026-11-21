@@ -1,0 +1,51 @@
+# Builds and tests LightSync on every push and pull request.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Test the service and libraries
+        run: cargo test --workspace --locked
+
+      - name: Build the service (release)
+        run: cargo build -p lightsyncd --release --locked
+
+      - name: .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build the app
+        run: dotnet build ui/LightSync.App -c Release
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightsync-windows-x64
+          path: |
+            target/release/lightsyncd.exe
+            ui/LightSync.App/bin/**/Release/**/win-x64/
+          if-no-files-found: warn

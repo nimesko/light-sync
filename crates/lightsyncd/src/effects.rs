@@ -165,10 +165,19 @@ impl Palette {
     }
 }
 
+/// An effect by name, or Static for a name this version doesn't know.
+fn effect_or_static<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Effect, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+
 /// What the user picked; persisted between runs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LightState {
+    /// An effect this version doesn't know (a removed one, or one from a newer version) reads as
+    /// Static, so the rest of a saved scene, preset or trigger still loads.
+    #[serde(deserialize_with = "effect_or_static")]
     pub effect: Effect,
     /// "RRGGBB"
     pub color: String,
@@ -874,6 +883,18 @@ mod tests {
         assert_eq!(Effect::parse("aurora"), Some(Effect::Aurora));
         assert_eq!(Effect::parse("nope"), None);
         assert!(!Effect::Static.is_animated());
+    }
+
+    #[test]
+    fn an_unknown_effect_loads_as_static() {
+        // A removed effect (or one from a newer version) in a saved state: Static, the rest kept.
+        let s: LightState = serde_json::from_str(r#"{"effect":"screen_ambience","color":"00ff00","brightness":40,"split":"led"}"#).unwrap();
+        assert_eq!((s.effect, s.color.as_str(), s.brightness, s.split), (Effect::Static, "00ff00", 40, Split::Led));
+        let scene = crate::scene::Scene::from_json(r#"{"default":{"effect":"screen_ambience"},"overrides":{"x":{"effect":"breathing"}}}"#).unwrap();
+        assert_eq!((scene.default.effect, scene.overrides["x"].effect), (Effect::Static, Effect::Breathing));
+        // Asked for by name, an unknown effect is still an error.
+        assert_eq!(Effect::parse("screen_ambience"), None);
+        assert_eq!(Effect::parse("static"), Some(Effect::Static));
     }
 
     #[test]

@@ -71,7 +71,7 @@ public static class NowPlaying
                 mediaApp = session.SourceAppUserModelId;
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // No media sessions (or the service is unavailable): the apps are still shown.
         }
@@ -127,7 +127,7 @@ public static class NowPlaying
                     {
                         name = p.MainModule?.FileVersionInfo.FileDescription is { Length: > 0 } d ? d : name;
                     }
-                    catch (Exception)
+                    catch (Exception failure) when (Errors.Expected(failure))
                     {
                         // Another user's or an elevated process: keep its process name.
                     }
@@ -136,13 +136,13 @@ public static class NowPlaying
                         found[p.ProcessName] = new SoundApp(name, p.ProcessName, peak);
                     }
                 }
-                catch (Exception)
+                catch (Exception failure) when (Errors.Expected(failure))
                 {
                     // The process just ended.
                 }
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return [];
         }
@@ -190,7 +190,7 @@ public static class NowPlaying
             }
             return ("a web page", null);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return (null, null);
         }

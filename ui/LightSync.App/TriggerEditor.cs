@@ -622,7 +622,7 @@ public sealed partial class MainWindow
             {
                 testNote.Text = "Testing needs a newer LightSync service.";
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Expected(e))
             {
                 testNote.Text = $"Couldn't test: {Explain(e)}";
             }
@@ -794,7 +794,7 @@ public sealed partial class MainWindow
                 error.Visibility = Visibility.Visible;
                 return;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (Errors.Expected(ex))
             {
                 error.Text = Explain(ex);
                 error.Visibility = Visibility.Visible;
@@ -887,7 +887,7 @@ public sealed partial class MainWindow
         {
             leds = await _client.LedsAsync(row.Device.Id);
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             panel.Children.Clear();
             panel.Children.Add(new TextBlock

@@ -40,7 +40,7 @@ public partial class App : Application
         {
             CrashLog.Notify?.Invoke("app", ex);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Recoverable(failure))
         {
             // Logged already.
         }
@@ -63,7 +63,7 @@ public partial class App : Application
                 {
                     window.BringToFront();
                 }
-                catch (Exception e)
+                catch (Exception e) when (Errors.Recoverable(e))
                 {
                     CrashLog.Write("BringToFront", e);
                 }
@@ -74,7 +74,7 @@ public partial class App : Application
                 _window.AppWindow.Hide();
             }
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             CrashLog.Write("OnLaunched", e);
             throw;

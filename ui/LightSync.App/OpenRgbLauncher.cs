@@ -68,7 +68,7 @@ public static class OpenRgbLauncher
             await tcp.ConnectAsync("127.0.0.1", Port, cts.Token);
             return true;
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return false;
         }
@@ -123,7 +123,7 @@ public static class OpenRgbLauncher
             var v = string.IsNullOrWhiteSpace(info.ProductVersion) ? info.FileVersion : info.ProductVersion;
             return string.IsNullOrWhiteSpace(v) ? null : v.Trim();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return null;
         }
@@ -296,7 +296,7 @@ public static class OpenRgbLauncher
             await p.WaitForExitAsync();
             return (p.ExitCode, output);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return (-1, "");
         }
@@ -334,7 +334,7 @@ public static class OpenRgbLauncher
         {
             return ElevatedResult.Declined;
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return ElevatedResult.Failed;
         }

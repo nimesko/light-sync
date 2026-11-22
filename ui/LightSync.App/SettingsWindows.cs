@@ -64,7 +64,7 @@ public sealed partial class MainWindow
             window.Activate();
             window.Refresh();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             CrashLog.Report("opening settings", e);
         }
@@ -87,7 +87,7 @@ public sealed partial class MainWindow
             {
                 window.Close();
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Recoverable(e))
             {
                 CrashLog.Write("closing settings", e);
             }
@@ -111,7 +111,7 @@ public sealed partial class MainWindow
                 {
                     await action();
                 }
-                catch (Exception e)
+                catch (Exception e) when (Errors.Recoverable(e))
                 {
                     // E.g. a dialog is already open: the shortcut just does nothing.
                     CrashLog.Write($"shortcut {key}", e);
@@ -262,7 +262,7 @@ public sealed partial class MainWindow
                 versions.PlaceholderText = list.Count > 0 ? "Pick a version" : "No Windows downloads found";
                 versions.IsEnabled = install.IsEnabled = list.Count > 0;
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Recoverable(e))
             {
                 if (!w.IsClosed)
                 {
@@ -485,7 +485,7 @@ public sealed partial class MainWindow
                 }
                 return;
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Recoverable(e))
             {
                 if (!w.IsClosed)
                 {
@@ -659,7 +659,7 @@ internal sealed partial class SettingsWindow : Window
             {
                 action();
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Recoverable(e))
             {
                 CrashLog.Write($"{Title}: updating the window", e);
             }
@@ -689,7 +689,7 @@ internal sealed partial class SettingsWindow : Window
         {
             await work();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             if (IsClosed)
             {

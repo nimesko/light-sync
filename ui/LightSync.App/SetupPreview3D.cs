@@ -117,7 +117,7 @@ internal sealed class SetupPreview3D
                             web.UpdateLayout();
                             web.Width = double.NaN;
                         }
-                        catch (Exception)
+                        catch (Exception failure) when (Errors.Expected(failure))
                         {
                             // Closing.
                         }
@@ -131,7 +131,7 @@ internal sealed class SetupPreview3D
                 await core.TrySuspendAsync();
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Not supported by this WebView2 runtime, or it is reloading: nothing to do.
         }
@@ -202,7 +202,7 @@ internal sealed class SetupPreview3D
         {
             await StartAsync();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             CrashLog.Write("starting the 3D preview", e);
             try
@@ -210,7 +210,7 @@ internal sealed class SetupPreview3D
                 _web = null;
                 Fail("The 3D preview couldn't start. Everything else works without it; restarting LightSync tries again.");
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Recoverable(failure))
             {
                 // Logged already.
             }
@@ -237,7 +237,7 @@ internal sealed class SetupPreview3D
                 return;
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             FailNoRuntime();
             return;
@@ -258,7 +258,7 @@ internal sealed class SetupPreview3D
         {
             await web.EnsureCoreWebView2Async();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             _host.Children.Clear();
             _web = null;
@@ -323,7 +323,7 @@ internal sealed class SetupPreview3D
             {
                 core.Navigate(StartPage);
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Expected(failure))
             {
                 // Nothing more to do; the preview stays blank.
             }
@@ -366,7 +366,7 @@ internal sealed class SetupPreview3D
         {
             _web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(message, Json));
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // The page is reloading (or the window is closing); it asks for everything again when ready.
         }
@@ -383,7 +383,7 @@ internal sealed class SetupPreview3D
                 HandleMessage(e);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Errors.Recoverable(ex))
         {
             CrashLog.Report("3D preview", ex);
         }
@@ -405,7 +405,7 @@ internal sealed class SetupPreview3D
             }
             msg = JsonNode.Parse(json) as JsonObject;
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return;
         }
@@ -879,7 +879,7 @@ internal sealed class SetupPreview3D
             _lastColors = json;
             _web.CoreWebView2?.PostWebMessageAsJson(json);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Reloading; colours come again in 100 ms.
         }

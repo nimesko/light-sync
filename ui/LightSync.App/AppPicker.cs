@@ -56,13 +56,13 @@ public sealed partial class MainWindow
                         name = info.FileDescription is { Length: > 0 } d ? d : info.ProductName is { Length: > 0 } pn ? pn : name;
                     }
                 }
-                catch (Exception)
+                catch (Exception failure) when (Errors.Expected(failure))
                 {
                     // No access: keep the program name.
                 }
                 apps[exe] = new RunningApp(exe, name.Trim(), p.MainWindowTitle.Trim(), path);
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Expected(failure))
             {
                 // Gone already, or no access.
             }
@@ -97,7 +97,7 @@ public sealed partial class MainWindow
                 icon = bmp;
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // No icon; a generic one shows.
         }

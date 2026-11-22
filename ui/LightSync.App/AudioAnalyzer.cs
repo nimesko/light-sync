@@ -467,7 +467,7 @@ public sealed partial class MainWindow
             }
             RefreshSource();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Recoverable(failure))
         {
             foreach (var v in shown)
             {

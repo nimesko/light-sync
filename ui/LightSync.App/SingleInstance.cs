@@ -22,7 +22,7 @@ public static class SingleInstance
             using var show = EventWaitHandle.OpenExisting(Name + ".Show");
             show.Set();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // The first instance is still starting up; it shows its window anyway.
         }

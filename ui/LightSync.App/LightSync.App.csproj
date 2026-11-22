@@ -25,6 +25,8 @@
     <AssemblyTitle>LightSync</AssemblyTitle>
     <Description>LightSync: one place for all your PC lighting</Description>
     <Nullable>enable</Nullable>
+    <!-- The source-generated Windows calls (LibraryImport, NativeMethods.cs) use unsafe code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>

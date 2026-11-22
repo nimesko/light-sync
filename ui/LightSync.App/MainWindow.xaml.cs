@@ -141,7 +141,7 @@ public sealed partial class MainWindow : Window
                         $"LightSync recovered from an error ({where}): {e.Message} Details are in crash.log.");
                 }
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Recoverable(failure))
             {
                 // Logged already.
             }
@@ -197,7 +197,7 @@ public sealed partial class MainWindow : Window
                     SetColor(args.NewColor, fromPicker: true);
                 }
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Recoverable(e))
             {
                 CrashLog.Report("color picker", e);
             }
@@ -274,7 +274,7 @@ public sealed partial class MainWindow : Window
             {
                 action();
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Recoverable(e))
             {
                 CrashLog.Report("updating the window", e);
             }
@@ -317,7 +317,7 @@ public sealed partial class MainWindow : Window
         {
             ShowPower((await _client.StatusAsync()).On ?? true);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Not fatal: the status timer tries again.
         }
@@ -351,7 +351,7 @@ public sealed partial class MainWindow : Window
                     "Restart OpenRGB", RestartOpenRgbAsync);
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Listing listeners is best effort.
         }
@@ -456,7 +456,7 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             SetHealth(Health.Bad, "Not connected");
             ShowEmpty("LightSync couldn't reach your devices.");
@@ -496,7 +496,7 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // The service stopped (crash, update, someone ended it): start it again and reload.
             SetHealth(Health.Busy, "Restarting the lighting service...");
@@ -550,7 +550,7 @@ public sealed partial class MainWindow : Window
             }
             await RefreshRowsAsync();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not apply", Explain(e), "Start OpenRGB", StartOpenRgbAndLoadAsync);
         }
@@ -759,7 +759,7 @@ public sealed partial class MainWindow : Window
         {
             _groups = await _client.GroupsAsync();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             _groups = [];
         }
@@ -906,7 +906,7 @@ public sealed partial class MainWindow : Window
                 return AppWindow is { IsVisible: true } w &&
                     w.Presenter is not Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Minimized };
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Expected(failure))
             {
                 return false; // The window is going away.
             }
@@ -932,7 +932,7 @@ public sealed partial class MainWindow : Window
                 preview.Update(data);
             }
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Not connected right now: the status pill says so; keep the last picture.
         }
@@ -960,7 +960,7 @@ public sealed partial class MainWindow : Window
             ShowColor();
             ShowEffect();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Older service or not ready yet: keep what is shown.
         }
@@ -1045,7 +1045,7 @@ public sealed partial class MainWindow : Window
             {
                 Content = t.Kind == TargetKind.Device ? t.Title : $"{t.Title}  ({t.Subtitle})",
                 IsChecked = members.Contains(t.Id),
-                Margin = new Thickness(t.Level * 24, 0, 0, 0),
+                Margin = new Thickness(t.Level * 24.0, 0, 0, 0),
                 FontWeight = t.Kind == TargetKind.Device ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
             };
             boxes.Add((t.Id, box));
@@ -1090,7 +1090,7 @@ public sealed partial class MainWindow : Window
                 }
                 saved = await _client.SaveGroupAsync(group?.Id, name.Text.Trim(), picked);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (Errors.Expected(ex))
             {
                 error.Text = Explain(ex);
                 error.Visibility = Visibility.Visible;
@@ -1145,7 +1145,7 @@ public sealed partial class MainWindow : Window
                 await SelectAsync(_targets.FirstOrDefault() ?? _target);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Errors.Expected(ex))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not delete the group", Explain(ex));
         }
@@ -1238,7 +1238,7 @@ public sealed partial class MainWindow : Window
                 }
                 devices = await _client.SetLayoutAsync(zone.Id, f, f == 0 ? 0 : p);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (Errors.Expected(ex))
             {
                 error.Text = Explain(ex);
                 error.Visibility = Visibility.Visible;
@@ -1280,7 +1280,7 @@ public sealed partial class MainWindow : Window
             await _client.SetPowerAsync(on);
             ShowPower(on);
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowPower(_on);
             ShowNotice(InfoBarSeverity.Error, on ? "Could not turn the lights on" : "Could not turn the lights off", Explain(e));
@@ -1350,7 +1350,7 @@ public sealed partial class MainWindow : Window
                 _client.SetPowerAsync(false).Wait(TimeSpan.FromSeconds(2));
                 Thread.Sleep(150);
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Expected(failure))
             {
                 // Service gone: nothing to turn off.
             }
@@ -1381,7 +1381,7 @@ public sealed partial class MainWindow : Window
                 AutoPower(true);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Errors.Recoverable(ex))
         {
             CrashLog.Write("lock / unlock", ex);
         }
@@ -1409,7 +1409,7 @@ public sealed partial class MainWindow : Window
                 }));
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Errors.Recoverable(ex))
         {
             CrashLog.Write("sleep / resume", ex);
         }
@@ -1421,7 +1421,7 @@ public sealed partial class MainWindow : Window
         {
             _profiles = await _client.ProfilesAsync();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             _profiles = [];
         }
@@ -1544,7 +1544,7 @@ public sealed partial class MainWindow : Window
             ShowPreset(name.Text.Trim());
             ShowNotice(InfoBarSeverity.Success, $"Saved \"{name.Text.Trim()}\"", "Pick it any time from File > Presets or the tray icon.");
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not save the preset", Explain(e));
         }
@@ -1561,7 +1561,7 @@ public sealed partial class MainWindow : Window
             await LoadTargetStateAsync();
             ShowPreset(name);
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, $"Could not load \"{name}\"", Explain(e));
         }
@@ -1591,7 +1591,7 @@ public sealed partial class MainWindow : Window
                 ShowPreset(null);
             }
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not delete the preset", Explain(e));
         }
@@ -1689,7 +1689,7 @@ public sealed partial class MainWindow : Window
             _pushTimer.Stop();
             await _client.ResetAsync(profiles.IsChecked == true);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Errors.Expected(ex))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not reset", Explain(ex));
             return;
@@ -1779,7 +1779,7 @@ public sealed partial class MainWindow : Window
             _settings.LastUpdateCheck = DateTimeOffset.Now;
             _settings.Save();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             if (interactive)
             {
@@ -1833,7 +1833,7 @@ public sealed partial class MainWindow : Window
                 {
                     target(text, value);
                 }
-                catch (Exception e)
+                catch (Exception e) when (Errors.Recoverable(e))
                 {
                     CrashLog.Write("install progress", e);
                 }
@@ -1875,7 +1875,7 @@ public sealed partial class MainWindow : Window
                         break;
                 }
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Expected(e))
             {
                 report($"Failed: {e.Message}", null);
                 ShowNotice(InfoBarSeverity.Error, "Could not update OpenRGB", e.Message);
@@ -1914,21 +1914,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct LastInputInfo
-    {
-        public uint Size;
-        public uint Time;
-    }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetLastInputInfo")]
-    private static extern bool GetLastInputInfo(ref LastInputInfo info);
-
     /// <summary>Time since the last keyboard or mouse input in this session.</summary>
     private static TimeSpan IdleTime()
     {
-        var info = new LastInputInfo { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<LastInputInfo>() };
-        return GetLastInputInfo(ref info) ? TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - info.Time)) : TimeSpan.Zero;
+        var info = new NativeMethods.LASTINPUTINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.LASTINPUTINFO>() };
+        return NativeMethods.GetLastInputInfo(ref info) ? TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - info.dwTime)) : TimeSpan.Zero;
     }
 
     private void OpenRgbFolder_Click(object sender, RoutedEventArgs e)
@@ -1962,7 +1952,7 @@ public sealed partial class MainWindow : Window
         {
             webView = Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString() ?? "not installed";
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             webView = "not installed";
         }
@@ -1973,7 +1963,7 @@ public sealed partial class MainWindow : Window
                 using var p = System.Diagnostics.Process.GetProcessesByName("lightsyncd").FirstOrDefault();
                 return p?.MainModule?.FileName is { } path ? $"running, built {File.GetLastWriteTime(path):yyyy-MM-dd HH:mm}" : "not running";
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Expected(failure))
             {
                 return "running";
             }
@@ -2247,7 +2237,7 @@ public sealed partial class MainWindow : Window
         {
             states = await _client.GetTargetsAsync(rows.Select(r => r.Id));
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return; // The status pill already reports a lost connection.
         }
@@ -2419,7 +2409,7 @@ public sealed partial class MainWindow : Window
         {
             Task.Run(() => _client.ShutdownAsync()).Wait(TimeSpan.FromSeconds(2));
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Not running, or an older service: nothing to stop.
         }
@@ -2431,7 +2421,7 @@ public sealed partial class MainWindow : Window
             _trayIcon?.Dispose();
             CloseSettingsWindows();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             CrashLog.Write("exit", e);
         }
@@ -2565,7 +2555,7 @@ internal sealed class RelayCommand(Action action) : System.Windows.Input.IComman
         {
             action();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             CrashLog.Report("tray icon", e);
         }
@@ -2609,7 +2599,7 @@ public sealed class TargetItem : System.ComponentModel.INotifyPropertyChanged
     public ZoneInfo? Zone { get; init; }
     public GroupInfo? Group { get; init; }
 
-    public Thickness Indent => new(Level * 18, 0, 0, 0);
+    public Thickness Indent => new(Level * 18.0, 0, 0, 0);
     public double IconSize => Level == 0 ? 28 : 22;
     public double GlyphSize => Level == 0 ? 14 : 11;
 
@@ -2700,7 +2690,7 @@ public static class StartupEntry
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey);
             return key?.GetValue(Name) is string;
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return false;
         }
@@ -2721,7 +2711,7 @@ public static class StartupEntry
             }
             return true;
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return false;
         }

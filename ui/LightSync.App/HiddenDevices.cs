@@ -45,7 +45,7 @@ public sealed partial class MainWindow
             _hidingSupported = false;
             return devices;
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return devices;
         }
@@ -77,7 +77,7 @@ public sealed partial class MainWindow
             RefreshSettingsWindow(SettingsPage.Devices);
             return;
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, hidden ? $"Could not hide {name}" : $"Could not show {name}", Explain(e));
             return;
@@ -237,7 +237,7 @@ public sealed partial class MainWindow
             }
             args.Handled = true;
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             CrashLog.Report("device menu", e);
         }

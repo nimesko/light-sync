@@ -78,7 +78,7 @@ public static class OpenRgbUpdater
                 }
                 errors.Add($"{new Uri(url).Host}: no Windows 64-bit download found");
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Expected(e))
             {
                 errors.Add($"{new Uri(url).Host}: {e.Message}");
             }
@@ -190,7 +190,7 @@ public static class OpenRgbUpdater
         {
             File.Delete(download.Zip);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Temp files get cleaned up eventually.
         }
@@ -278,7 +278,7 @@ public sealed class AppSettings
         {
             return File.Exists(FilePath) ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new() : new();
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return new();
         }
@@ -294,7 +294,7 @@ public sealed class AppSettings
             File.WriteAllText(tmp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
             File.Move(tmp, FilePath, overwrite: true);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Settings are a convenience; never crash over them.
         }

@@ -37,7 +37,7 @@ internal static class CrashLog
                     File.AppendAllText(path, text);
                     return;
                 }
-                catch (Exception)
+                catch (Exception failure) when (Errors.Recoverable(failure))
                 {
                     // Try the next place.
                 }
@@ -53,7 +53,7 @@ internal static class CrashLog
         {
             Notify?.Invoke(where, e);
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Recoverable(failure))
         {
             // The notice is a courtesy.
         }
@@ -66,7 +66,7 @@ internal static class CrashLog
         {
             await work();
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             Report(where, e);
         }

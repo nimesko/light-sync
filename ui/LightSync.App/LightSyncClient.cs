@@ -431,7 +431,7 @@ public sealed class LightSyncClient
             probe.Connect(timeoutMs);
             return true;
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             return false;
         }

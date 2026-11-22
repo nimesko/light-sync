@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using static LightSync.App.NativeMethods;
 
 namespace LightSync.App;
 
@@ -91,14 +92,22 @@ internal sealed class InputListener : IDisposable
         try
         {
             var className = "LightSyncInput" + Environment.ProcessId;
+            var namePtr = Marshal.StringToHGlobalUni(className);
             var wc = new WNDCLASSEX
             {
                 cbSize = (uint)Marshal.SizeOf<WNDCLASSEX>(),
                 lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProc),
                 hInstance = GetModuleHandle(null),
-                lpszClassName = className,
+                lpszClassName = namePtr,
             };
-            RegisterClassEx(ref wc); // Fails harmlessly if a previous listener thread registered it.
+            try
+            {
+                RegisterClassEx(ref wc); // Fails harmlessly if a previous listener thread registered it.
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(namePtr); // Windows keeps its own copy of the name.
+            }
             var hwnd = CreateWindowEx(0, className, "", 0, 0, 0, 0, 0, HWND_MESSAGE, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
             lock (_gate)
             {
@@ -116,7 +125,7 @@ internal sealed class InputListener : IDisposable
                 DispatchMessage(ref msg);
             }
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             CrashLog.Write("input triggers", e);
         }
@@ -158,7 +167,7 @@ internal sealed class InputListener : IDisposable
                     return IntPtr.Zero;
             }
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Recoverable(e))
         {
             // Never what was pressed: only that handling it failed.
             CrashLog.Write("input triggers", e.GetType().Name + ": " + e.Message);
@@ -315,91 +324,4 @@ internal sealed class InputListener : IDisposable
     private const int RIM_TYPEMOUSE = 0, RIM_TYPEKEYBOARD = 1;
     private const ushort UsageMouse = 0x02, UsageKeyboard = 0x06;
     private const ushort RI_MOUSE_LEFT_BUTTON_DOWN = 0x0001, RI_MOUSE_RIGHT_BUTTON_DOWN = 0x0004, RI_MOUSE_MIDDLE_BUTTON_DOWN = 0x0010;
-    private static readonly IntPtr HWND_MESSAGE = new(-3);
-
-    private delegate IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct WNDCLASSEX
-    {
-        public uint cbSize;
-        public uint style;
-        public IntPtr lpfnWndProc;
-        public int cbClsExtra;
-        public int cbWndExtra;
-        public IntPtr hInstance;
-        public IntPtr hIcon;
-        public IntPtr hCursor;
-        public IntPtr hbrBackground;
-        public string? lpszMenuName;
-        public string lpszClassName;
-        public IntPtr hIconSm;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MSG
-    {
-        public IntPtr hwnd;
-        public uint message;
-        public IntPtr wParam;
-        public IntPtr lParam;
-        public uint time;
-        public int ptX;
-        public int ptY;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RAWINPUTDEVICE
-    {
-        public ushort usUsagePage;
-        public ushort usUsage;
-        public uint dwFlags;
-        public IntPtr hwndTarget;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RAWINPUTHEADER
-    {
-        public uint dwType;
-        public uint dwSize;
-        public IntPtr hDevice;
-        public IntPtr wParam;
-    }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern ushort RegisterClassEx(ref WNDCLASSEX wc);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateWindowEx(uint exStyle, string className, string windowName, uint style, int x, int y, int width, int height,
-        IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
-
-    [DllImport("user32.dll")]
-    private static extern bool DestroyWindow(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr DefWindowProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern int GetMessage(out MSG msg, IntPtr hwnd, uint min, uint max);
-
-    [DllImport("user32.dll")]
-    private static extern bool TranslateMessage(ref MSG msg);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr DispatchMessage(ref MSG msg);
-
-    [DllImport("user32.dll")]
-    private static extern void PostQuitMessage(int code);
-
-    [DllImport("user32.dll")]
-    private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] devices, uint count, uint size);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetRawInputData(IntPtr rawInput, uint command, IntPtr data, ref uint size, uint headerSize);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr GetModuleHandle(string? name);
 }

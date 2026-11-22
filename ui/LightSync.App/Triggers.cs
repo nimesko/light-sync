@@ -78,7 +78,7 @@ public sealed partial class MainWindow
                 await _client.SaveTriggerAsync(t);
                 changed = true;
             }
-            catch (Exception e)
+            catch (Exception e) when (Errors.Recoverable(e))
             {
                 CrashLog.Write("updating a trigger's LED targets", e);
             }
@@ -102,7 +102,7 @@ public sealed partial class MainWindow
             _triggersSupported = false;
             _triggers = [];
         }
-        catch (Exception)
+        catch (Exception failure) when (Errors.Expected(failure))
         {
             // Not reachable right now: keep what we had; the next check tries again.
         }
@@ -137,7 +137,7 @@ public sealed partial class MainWindow
                 {
                     await ReportAppsAsync(wanted.Apps);
                 }
-                catch (Exception)
+                catch (Exception failure) when (Errors.Expected(failure))
                 {
                     // An older service, or busy: app triggers wait for the next check.
                 }
@@ -146,7 +146,7 @@ public sealed partial class MainWindow
             {
                 plan = InputPlan.None;
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Expected(failure))
             {
                 plan = InputPlan.None; // Nobody to tell: don't listen.
             }
@@ -183,7 +183,7 @@ public sealed partial class MainWindow
                 {
                     names.Add(p.ProcessName + ".exe");
                 }
-                catch (Exception)
+                catch (Exception failure) when (Errors.Expected(failure))
                 {
                     // Gone already.
                 }
@@ -266,7 +266,7 @@ public sealed partial class MainWindow
             {
                 await _inputClient.InputEventAsync(kind, code, button);
             }
-            catch (Exception)
+            catch (Exception failure) when (Errors.Expected(failure))
             {
                 // The service is busy or gone; this one press just doesn't light anything.
             }
@@ -474,7 +474,7 @@ public sealed partial class MainWindow
                     {
                         await _client.SaveTriggerAsync(t);
                     }
-                    catch (Exception e)
+                    catch (Exception e) when (Errors.Expected(e))
                     {
                         t.Enabled = !on.IsOn;
                         syncing = true;
@@ -571,7 +571,7 @@ public sealed partial class MainWindow
         {
             await _client.MoveTriggerAsync(t.Id, to);
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not change the priority", Explain(e));
             return;
@@ -612,7 +612,7 @@ public sealed partial class MainWindow
         {
             await _client.DeleteTriggerAsync(t.Id);
         }
-        catch (Exception e)
+        catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not delete the trigger", Explain(e));
             return;

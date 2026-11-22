@@ -26,12 +26,12 @@ public sealed class SoundVisualizer
     private readonly Ellipse _beatDot;
     private readonly TextBlock _tempo;
     private readonly TextBlock _status;
+    /// <summary>What is playing: the app, the media and the site (NowPlaying).</summary>
+    private readonly TextBlock _source;
     private double _beatGlow;
     private bool _wasBeat;
     private int _beats;
-    private string _effect = "static";
     private string _palette = "effect";
-    private Color _color = Color.FromArgb(255, 255, 255, 255);
 
     /// <summary>The whole view, to put on a page.</summary>
     public Border Root { get; }
@@ -127,10 +127,21 @@ public sealed class SoundVisualizer
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.Children.Add(canvas);
         Grid.SetColumn(side, 1);
         grid.Children.Add(side);
         Grid.SetRow(_status, 1);
+        _source = new TextBlock
+        {
+            Style = Style("CaptionTextBlockStyle"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+            Visibility = Visibility.Collapsed,
+        };
+        Grid.SetRow(_source, 2);
+        Grid.SetColumnSpan(_source, 2);
+        grid.Children.Add(_source);
         Grid.SetColumnSpan(_status, 2);
         grid.Children.Add(_status);
         Root = new Border
@@ -148,7 +159,7 @@ public sealed class SoundVisualizer
     /// <summary>Paint the bars for this effect, color and sound palette (as the lights get them).</summary>
     public void Recolor(string effect, Color color, string palette)
     {
-        (_effect, _color, _palette) = (effect, color, palette);
+        _palette = palette;
         if (palette == "effect")
         {
             for (var i = 0; i < Bands; i++)
@@ -156,6 +167,16 @@ public sealed class SoundVisualizer
                 _barBrushes[i].Color = EffectColor(effect, color, (double)i / (Bands - 1));
             }
         }
+    }
+
+    /// <summary>The "what is playing" line (hidden when empty).</summary>
+    public void SetSource(string? text)
+    {
+        if (_source.Text != (text ?? ""))
+        {
+            _source.Text = text ?? "";
+        }
+        _source.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
     }
 
     public void SetStatus(string text)
@@ -251,6 +272,7 @@ public sealed class SoundVisualizer
             "rainbow" => Hue(x + 0.05 * beat),
             "random" => Hue(beat * 0.618034 + 0.03 * (x - 0.5)),
             "cold_hot" => Hue(0.66 * (1 - heat)),
+            "low_high" => Hue(0.78 * x),
             "fire" => Hsv(0.14 * heat, 1 - 0.55 * heat * heat, 1),
             "neon" => Hue(((x < 0.5 ? 0 : 1) + beat) % 2 == 0 ? 0.92 : 0.5),
             _ => Hue(0.78 * x),
@@ -288,6 +310,7 @@ public sealed partial class MainWindow
         ("rainbow", "Rainbow", "Every color of the rainbow along each device, drifting with the music"),
         ("random", "Random", "A new random color on every beat"),
         ("cold_hot", "Cold to hot", "By how loud it is: blue when quiet, through green and yellow, to red at the loudest"),
+        ("low_high", "Low to high", "By pitch: red for bass, through orange, green and blue, to violet for treble"),
         ("fire", "Fire", "By how loud it is: deep red when quiet to yellow and white-hot at the loudest"),
         ("neon", "Neon", "Neon pink and cyan along each device, swapping on every beat"),
     ];
@@ -442,6 +465,7 @@ public sealed partial class MainWindow
                     v.SetStatus(status);
                 }
             }
+            RefreshSource();
         }
         catch (Exception)
         {
@@ -454,6 +478,32 @@ public sealed partial class MainWindow
         {
             _analyzerBusy = false;
         }
+    }
+
+    private bool _sourceBusy;
+    private DateTime _sourceAt;
+
+    /// <summary>
+    /// Every 2 seconds while a sound view is on screen: what is playing (the app, the media, the site), read
+    /// off the UI thread (NowPlaying) and shown under each view.
+    /// </summary>
+    private void RefreshSource()
+    {
+        if (_sourceBusy || DateTime.UtcNow - _sourceAt < TimeSpan.FromSeconds(2))
+        {
+            return;
+        }
+        _sourceBusy = true;
+        _sourceAt = DateTime.UtcNow;
+        Task.Run(NowPlaying.GetAsync).ContinueWith(t => OnUi(() =>
+        {
+            _sourceBusy = false;
+            var text = t.IsCompletedSuccessfully ? t.Result.Describe() : null;
+            foreach (var v in _visualizers.Where(v => v.Polling))
+            {
+                v.SetSource(text);
+            }
+        }), TaskScheduler.Default);
     }
 
     /// <summary>" Bright and energetic." (the tempo shows beside the beat light).</summary>

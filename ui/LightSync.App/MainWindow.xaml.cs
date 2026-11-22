@@ -116,7 +116,7 @@ public sealed partial class MainWindow : Window
     /// <summary>Lights were turned off by a lock or sleep, so unlock / resume turns them back on.</summary>
     private bool _autoOff;
     private List<string> _profiles = [];
-    private MenuFlyoutSubItem? _trayProfiles;
+    private MenuFlyout? _trayMenu;
 
     public MainWindow()
     {
@@ -1377,17 +1377,48 @@ public sealed partial class MainWindow : Window
             ProfilesMenu.Items.Add(new MenuFlyoutItem { Text = "No presets yet", IsEnabled = false });
         }
 
-        if (_trayProfiles is not null)
+        BuildTrayMenu();
+    }
+
+    /// <summary>
+    /// The tray menu, three items: Open LightSync, Presets (the saved presets, the loaded one checked) and Exit.
+    /// It is a native Windows menu (H.NotifyIcon's PopupMenu mode), so it fits its items with no scrolling and
+    /// the Presets submenu opens beside it. Items run through Command (what that mode invokes).
+    /// </summary>
+    private void BuildTrayMenu()
+    {
+        if (_trayMenu is not { } menu)
         {
-            _trayProfiles.Items.Clear();
-            foreach (var name in _profiles)
-            {
-                var item = new MenuFlyoutItem { Text = name };
-                item.Click += (_, _) => Safe("loading a preset", () => LoadProfileAsync(name));
-                _trayProfiles.Items.Add(item);
-            }
-            _trayProfiles.IsEnabled = _profiles.Count > 0;
+            return;
         }
+        menu.Items.Clear();
+        menu.Items.Add(new MenuFlyoutItem
+        {
+            Text = "Open LightSync",
+            Command = new RelayCommand(() => OnUi(ShowWindow)),
+        });
+        var presets = new MenuFlyoutSubItem { Text = "Presets" };
+        if (_profiles.Count == 0)
+        {
+            presets.Items.Add(new MenuFlyoutItem { Text = "No presets yet (File > Presets > Save)", IsEnabled = false });
+        }
+        foreach (var name in _profiles)
+        {
+            var preset = name;
+            presets.Items.Add(new ToggleMenuFlyoutItem
+            {
+                Text = name,
+                IsChecked = name == _currentPreset,
+                Command = new RelayCommand(() => OnUi(() => Safe("loading a preset", () => LoadProfileAsync(preset)))),
+            });
+        }
+        menu.Items.Add(presets);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(new MenuFlyoutItem
+        {
+            Text = "Exit LightSync",
+            Command = new RelayCommand(() => OnUi(ExitApp)),
+        });
     }
 
     private async Task SaveProfileAsync()
@@ -2219,23 +2250,14 @@ public sealed partial class MainWindow : Window
 
     private void CreateTrayIcon(string icoPath)
     {
-        var menu = new MenuFlyout();
-        // Open LightSync, saved presets, Exit LightSync (closes the app and its lighting service).
-        _trayProfiles = new MenuFlyoutSubItem { Text = "Presets", IsEnabled = false, Icon = new FontIcon { Glyph = "\uE790" } };
-        var show = new MenuFlyoutItem { Text = "Open LightSync", Icon = new FontIcon { Glyph = "\uE8A7" }, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
-        show.Click += (_, _) => Safe("showing the window", () => { ShowWindow(); return Task.CompletedTask; });
-        var exit = new MenuFlyoutItem { Text = "Exit LightSync", Icon = new FontIcon { Glyph = "\uE7E8" } };
-        ToolTipService.SetToolTip(exit, "Close LightSync completely (the app and its lighting service). The lights keep their last colors.");
-        exit.Click += (_, _) => ExitApp();
-        menu.Items.Add(show);
-        menu.Items.Add(_trayProfiles);
-        menu.Items.Add(new MenuFlyoutSeparator());
-        menu.Items.Add(exit);
+        _trayMenu = new MenuFlyout();
+        var menu = _trayMenu;
+        BuildTrayMenu();
 
         _trayIcon = new TaskbarIcon
         {
             ToolTipText = "LightSync (click to open)",
-            ContextMenuMode = ContextMenuMode.SecondWindow,
+            ContextMenuMode = ContextMenuMode.PopupMenu,
             ContextFlyout = menu,
             NoLeftClickDelay = true,
             LeftClickCommand = new RelayCommand(ShowWindow),
@@ -2338,6 +2360,7 @@ public sealed partial class MainWindow : Window
         _settings.CurrentPreset = name;
         _settings.Save();
         FooterPreset.Text = name is null ? "Preset: Custom" : $"Preset: {name}";
+        BuildTrayMenu(); // the tray checks the current preset
         RefreshHome();
     }
 

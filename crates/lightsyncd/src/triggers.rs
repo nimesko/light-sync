@@ -129,7 +129,28 @@ pub enum Source {
         /// which also covers "music.youtube.com"; no paths or queries).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         site: Option<String>,
+        /// More apps (and sites): the trigger holds while any one of them does.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        apps: Vec<AppWatch>,
     },
+}
+
+/// One app (and optionally a site it shows) an `app_running` trigger watches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppWatch {
+    pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+}
+
+/// The most apps and sites one trigger watches.
+const MAX_WATCHES: usize = 16;
+
+/// Everything an `app_running` trigger watches, as the keys the UI reports ([`watch_key`]).
+fn watch_keys(app: &str, site: Option<&str>, apps: &[AppWatch]) -> Vec<String> {
+    std::iter::once(watch_key(app, site))
+        .chain(apps.iter().map(|w| watch_key(&w.app, w.site.as_deref())))
+        .collect()
 }
 
 impl Source {
@@ -330,19 +351,39 @@ pub fn validate(mut t: Trigger, scene: &Scene) -> Result<Trigger> {
     match &mut t.source {
         Source::Key { keys: Keys::Codes(c) } if c.is_empty() => bail!("'keys' must be \"any\" or a non-empty list of key codes"),
         Source::AudioLevel { above, .. } if !(0.0..=1.0).contains(above) => bail!("'above' must be 0..1"),
-        Source::AppRunning { app, site } => {
-            *app = app_name(app);
-            if app.len() < 5 || app.len() > 128 {
+        Source::AppRunning { app, site, apps } => {
+            // Every app (and site) it watches, checked and normalised, duplicates dropped; the first
+            // stays in `app` / `site`, the others in `apps`.
+            let mut all: Vec<AppWatch> = vec![];
+            let first = AppWatch { app: std::mem::take(app), site: site.take() };
+            for w in std::iter::once(first).chain(std::mem::take(apps)).filter(|w| !w.app.trim().is_empty()) {
+                let a = app_name(&w.app);
+                if a.len() < 5 || a.len() > 128 {
+                    bail!("'app' must be a program file name such as \"game.exe\"");
+                }
+                let s = match w.site.as_deref() {
+                    Some(s) => match site_host(s) {
+                        h if !h.is_empty() => Some(h),
+                        _ if s.trim().is_empty() => None,
+                        _ => bail!("'site' must be a web site's host such as \"youtube.com\""),
+                    },
+                    None => None,
+                };
+                let w = AppWatch { app: a, site: s };
+                if !all.contains(&w) {
+                    all.push(w);
+                }
+            }
+            if all.is_empty() {
                 bail!("'app' must be a program file name such as \"game.exe\"");
             }
-            if let Some(s) = site.as_deref() {
-                let host = site_host(s);
-                *site = match host.as_str() {
-                    "" if s.trim().is_empty() => None,
-                    "" => bail!("'site' must be a web site's host such as \"youtube.com\""),
-                    _ => Some(host),
-                };
+            if all.len() > MAX_WATCHES {
+                bail!("a trigger watches at most {MAX_WATCHES} apps and sites");
             }
+            let first = all.remove(0);
+            *app = first.app;
+            *site = first.site;
+            *apps = all;
         }
         _ => {}
     }
@@ -450,10 +491,11 @@ pub fn input_wanted(scene: &Scene) -> InputWanted {
             }
             Source::MouseClick { .. } => w.mouse_click = true,
             Source::MouseMove => w.mouse_move = true,
-            Source::AppRunning { app, site } => {
-                let key = watch_key(app, site.as_deref());
-                if !w.apps.contains(&key) {
-                    w.apps.push(key);
+            Source::AppRunning { app, site, apps } => {
+                for key in watch_keys(app, site.as_deref(), apps) {
+                    if !w.apps.contains(&key) {
+                        w.apps.push(key);
+                    }
                 }
             }
             _ => {}
@@ -759,8 +801,9 @@ impl Engine {
         let mut items: Vec<Item> = vec![];
         if !scene.off {
             for (k, t) in scene.triggers.iter().enumerate().filter(|(_, t)| t.enabled) {
-                if let (Source::AppRunning { app, site }, Action::Lighting { state, .. }) = (&t.source, &t.action) {
-                    if self.apps.contains(&watch_key(app, site.as_deref())) {
+                if let (Source::AppRunning { app, site, apps }, Action::Lighting { state, .. }) = (&t.source, &t.action) {
+                    // Any one of the apps (or sites) it watches.
+                    if watch_keys(app, site.as_deref(), apps).iter().any(|k| self.apps.contains(k)) {
                         items.push(Item {
                             lighting: Some(state.clone()),
                             targets: t.targets.iter().flat_map(|id| scene.expand(id)).collect(),
@@ -1177,7 +1220,7 @@ mod tests {
     fn app_lighting_and_priority() {
         let app = |id: &str, color: &str| trig(json!({"id":id,"name":format!("game {id}"),"source":{"kind":"app_running","app":"C:\\Games\\Game.EXE"},"action":{"kind":"lighting","effect":"static","color":color,"brightness":100,"speed":50}}));
         let ok = validate(app("", "00FF00"), &Scene::default()).unwrap();
-        assert_eq!(ok.source, Source::AppRunning { app: "game.exe".into(), site: None });
+        assert_eq!(ok.source, Source::AppRunning { app: "game.exe".into(), site: None, apps: vec![] });
         // An app condition only with lighting (lighting itself goes with any trigger).
         assert!(validate(trig(json!({"name":"x","source":{"kind":"app_running","app":"a.exe"},"action":{"kind":"pulse","duration_ms":200}})), &Scene::default()).is_err());
         let mut s = scene_with(vec![validate(app("t1", "00ff00"), &Scene::default()).unwrap(), validate(app("t2", "0000ff"), &Scene::default()).unwrap()]);
@@ -1206,6 +1249,50 @@ mod tests {
     }
 
     #[test]
+    fn several_apps_and_sites_any_of_them() {
+        let t = |source: serde_json::Value| {
+            trig(json!({"id":"t1","name":"games","source":source,"action":{"kind":"lighting","effect":"static","color":"00ff00","brightness":100,"speed":50}}))
+        };
+        // Apps and sites together; normalised, duplicates dropped; the first stays in app / site.
+        let ok = validate(
+            t(json!({"kind":"app_running","app":"C:\\Games\\Dota2.exe","apps":[
+                {"app":"cs2"},{"app":"chrome.exe","site":"https://www.youtube.com/watch?v=1"},{"app":"DOTA2.EXE"},{"app":"msedge.exe","site":" "}
+            ]})),
+            &Scene::default(),
+        )
+        .unwrap();
+        let Source::AppRunning { app, site, apps } = &ok.source else { panic!("{:?}", ok.source) };
+        assert_eq!((app.as_str(), site), ("dota2.exe", &None));
+        assert_eq!(apps, &[
+            AppWatch { app: "cs2.exe".into(), site: None },
+            AppWatch { app: "chrome.exe".into(), site: Some("youtube.com".into()) },
+            AppWatch { app: "msedge.exe".into(), site: None },
+        ]);
+        // Only the list (no first app) works too; bad entries are refused; at most 16.
+        assert!(validate(t(json!({"kind":"app_running","app":"","apps":[{"app":"game.exe"}]})), &Scene::default()).is_ok());
+        assert!(validate(t(json!({"kind":"app_running","app":"","apps":[]})), &Scene::default()).is_err());
+        assert!(validate(t(json!({"kind":"app_running","app":"a.exe","apps":[{"app":"chrome.exe","site":"not a site"}]})), &Scene::default()).is_err());
+        let many: Vec<serde_json::Value> = (0..16).map(|k| json!({"app": format!("game{k}.exe")})).collect();
+        assert!(validate(t(json!({"kind":"app_running","app":"first.exe","apps":many})), &Scene::default()).is_err());
+        // Asked for each; lit while any one holds.
+        let s = scene_with(vec![ok]);
+        assert_eq!(input_wanted(&s).apps, ["dota2.exe", "cs2.exe", "chrome.exe/youtube.com", "msedge.exe"]);
+        let mut e = Engine::default();
+        let lit = |e: &mut Engine| {
+            let mut frame = vec![Color::BLACK; 2];
+            e.overlay(&s, ms(0), &AudioLevels::SILENT).apply(&dev(2), &s, &mut frame);
+            frame[0] != Color::BLACK
+        };
+        assert!(!lit(&mut e));
+        for running in [vec!["cs2.exe"], vec!["chrome.exe/youtube.com"], vec!["dota2.exe", "cs2.exe"]] {
+            e.set_apps(running.iter().map(|s| s.to_string()).collect());
+            assert!(lit(&mut e), "{running:?}");
+        }
+        e.set_apps(vec!["chrome.exe".into()]);
+        assert!(!lit(&mut e), "chrome without youtube");
+    }
+
+    #[test]
     fn app_on_a_web_site() {
         // Only the host is kept: no scheme, www., port, path or query.
         assert_eq!(site_host("https://www.YouTube.com/watch?v=1"), "youtube.com");
@@ -1218,10 +1305,10 @@ mod tests {
             trig(json!({"id":id,"name":"yt","source":{"kind":"app_running","app":"chrome.exe","site":s},"action":{"kind":"lighting","effect":"static","color":"ff0000","brightness":100,"speed":50}}))
         };
         let t = validate(site("t1", "https://www.YouTube.com/watch?v=1"), &Scene::default()).unwrap();
-        assert_eq!(t.source, Source::AppRunning { app: "chrome.exe".into(), site: Some("youtube.com".into()) });
+        assert_eq!(t.source, Source::AppRunning { app: "chrome.exe".into(), site: Some("youtube.com".into()), apps: vec![] });
         assert!(validate(site("t2", "not a site"), &Scene::default()).is_err());
         let blank = validate(site("t3", " "), &Scene::default()).unwrap();
-        assert_eq!(blank.source, Source::AppRunning { app: "chrome.exe".into(), site: None });
+        assert_eq!(blank.source, Source::AppRunning { app: "chrome.exe".into(), site: None, apps: vec![] });
         // The UI is asked for the app on the site, and lights only while that holds.
         let s = scene_with(vec![t]);
         assert_eq!(input_wanted(&s).apps, ["chrome.exe/youtube.com"]);

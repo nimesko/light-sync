@@ -20,7 +20,7 @@ else; it has only been tested on that one PC.
 | Music sync | Lights per device, zone or LED; follows what Windows is playing (spectrum, bass, treble, beat, tempo, mood), even at a low volume; kicks, claps and hi-hats hit even in loud electronic music |
 | What's playing | A live spectrum of what it hears, and which app is playing it: the song, and for a browser the site (YouTube, YouTube Music, Spotify...) |
 | Sound colors | One color, random (a set number of colors or a random number on every beat), cold to hot, low to high, rainbow, fire or neon |
-| Triggers | A key press, a mouse click, the beat, an app running or a web site open in a browser (like youtube.com) can light whole devices, some zones or single keys and LEDs, with priorities |
+| Triggers | A key press, a mouse click, the beat, one or more apps running or web sites open in a browser (like youtube.com, any of them) can light whole devices, some zones or single keys and LEDs, with priorities |
 | Presets | Save and load your lighting setups |
 | Power | Lights off on sleep, lock or when idle; start with Windows; lives in the tray |
 | OpenRGB management | Starts, stops and updates OpenRGB for you, listening on this PC only |

@@ -681,7 +681,16 @@ public sealed partial class MainWindow
                 var above = s["above"] is JsonValue v && v.TryGetValue<double>(out var d) ? d : 0.5;
                 return $"{band} is above {Math.Round(above * 100)}%";
             case "app_running":
-                return s["site"]?.ToString() is { Length: > 0 } site ? $"{s["app"]} is on {site}" : $"{s["app"]} is running";
+                // "dota2.exe is running", "chrome.exe is on youtube.com", "dota2.exe, cs2.exe or chrome.exe on youtube.com".
+                static string One(JsonNode? w) => w?["site"]?.ToString() is { Length: > 0 } site ? $"{w["app"]} on {site}" : $"{w?["app"]}";
+                var all = new List<string> { One(s) };
+                if (s["apps"] is JsonArray more)
+                {
+                    all.AddRange(more.Select(One));
+                }
+                return all.Count == 1
+                    ? s["site"]?.ToString() is { Length: > 0 } only ? $"{s["app"]} is on {only}" : $"{s["app"]} is running"
+                    : $"{string.Join(", ", all.SkipLast(1))} or {all[^1]}";
             default:
                 return $"\"{kind}\" happens";
         }

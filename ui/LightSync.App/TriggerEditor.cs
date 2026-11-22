@@ -248,42 +248,102 @@ public sealed partial class MainWindow
 
         // The app: picked from the apps running now (icon, name, window), searchable; typing a program
         // name still works for apps that aren't open.
-        var appExe = t.Source["app"]?.ToString() ?? "";
-        // A browser: optionally only while its current page is on a site (just the host).
-        var siteBox = new TextBox
+        // Each row: an app (and, for a browser, optionally a site its current page is on). The trigger
+        // holds while any one of them does.
+        var appRows = new List<(Func<string> Exe, TextBox Site, FrameworkElement View)>();
+        var appRowsPanel = new StackPanel { Spacing = 10 };
+        var addApp = new Button { Content = "Add another app or website" };
+        ToolTipService.SetToolTip(addApp, "The trigger lights while any one of its apps (or websites) is open");
+        void ShowAppRows()
         {
-            Header = "Website (optional)",
-            PlaceholderText = "For example youtube.com or music.youtube.com",
-            Text = t.Source["site"]?.ToString() ?? "",
-            MaxLength = 253,
-        };
-        var siteNote = Caption("");
-        var sitePanel = new StackPanel { Spacing = 4, Children = { siteBox, siteNote } };
-        void ShowSite()
-        {
-            sitePanel.Visibility = NowPlaying.IsBrowser(appExe) ? Visibility.Visible : Visibility.Collapsed;
-            var host = NowPlaying.SiteHost(siteBox.Text);
-            siteNote.Text = siteBox.Text.Trim().Length == 0
-                ? "Empty: any page. With a site, only while a window of this browser shows a page on it (its current tab)."
-                : host.Length == 0 ? "That isn't a web site's address: type its host, like youtube.com."
-                : host.Count(c => c == '.') == 1
-                    ? $"Only while a window of this browser shows a page on {host} or one of its subdomains (like m.{host})."
-                    : $"Only while a window of this browser shows a page on {host} or one of its subdomains.";
+            appRowsPanel.Children.Clear();
+            foreach (var row in appRows)
+            {
+                appRowsPanel.Children.Add(row.View);
+            }
+            addApp.IsEnabled = appRows.Count < 16;
         }
-        siteBox.TextChanged += (_, _) => ShowSite();
-        var appPicker = BuildAppPicker(appExe, exe =>
+        void AddAppRow(string initialExe, string initialSite)
         {
-            appExe = exe;
+            var exe = initialExe;
+            // A browser: optionally only while its current page is on a site (just the host).
+            var siteBox = new TextBox
+            {
+                Header = "Website (optional)",
+                PlaceholderText = "For example youtube.com or music.youtube.com",
+                Text = initialSite,
+                MaxLength = 253,
+            };
+            var siteNote = Caption("");
+            var sitePanel = new StackPanel { Spacing = 4, Children = { siteBox, siteNote } };
+            void ShowSite()
+            {
+                sitePanel.Visibility = NowPlaying.IsBrowser(exe) ? Visibility.Visible : Visibility.Collapsed;
+                var host = NowPlaying.SiteHost(siteBox.Text);
+                siteNote.Text = siteBox.Text.Trim().Length == 0
+                    ? "Empty: any page. With a site, only while a window of this browser shows a page on it (its current tab)."
+                    : host.Length == 0 ? "That isn't a web site's address: type its host, like youtube.com."
+                    : host.Count(c => c == '.') == 1
+                        ? $"Only while a window of this browser shows a page on {host} or one of its subdomains (like m.{host})."
+                        : $"Only while a window of this browser shows a page on {host} or one of its subdomains.";
+            }
+            siteBox.TextChanged += (_, _) => ShowSite();
+            var picker = BuildAppPicker(exe, chosen =>
+            {
+                exe = chosen;
+                ShowSite();
+            });
             ShowSite();
-        });
-        ShowSite();
+            var remove = new Button { Content = new FontIcon { Glyph = "", FontSize = 14 }, VerticalAlignment = VerticalAlignment.Top };
+            ToolTipService.SetToolTip(remove, "Remove this app");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(remove, "Remove this app");
+            var body = new StackPanel { Spacing = 6, Children = { picker, sitePanel } };
+            var view = new Grid { ColumnSpacing = 8 };
+            view.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            view.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            view.Children.Add(body);
+            Grid.SetColumn(remove, 1);
+            view.Children.Add(remove);
+            var row = (Exe: (Func<string>)(() => exe.Trim()), Site: siteBox, View: (FrameworkElement)view);
+            remove.Click += (_, _) =>
+            {
+                appRows.Remove(row);
+                if (appRows.Count == 0)
+                {
+                    AddAppRow("", "");
+                    return;
+                }
+                ShowAppRows();
+            };
+            appRows.Add(row);
+            ShowAppRows();
+        }
+        AddAppRow(t.Source["app"]?.ToString() ?? "", t.Source["site"]?.ToString() ?? "");
+        if (t.Source["apps"] is JsonArray moreApps)
+        {
+            foreach (var w in moreApps.OfType<JsonObject>())
+            {
+                AddAppRow(w["app"]?.ToString() ?? "", w["site"]?.ToString() ?? "");
+            }
+        }
+        addApp.Click += (_, _) => AddAppRow("", "");
         var appPanel = new StackPanel
         {
             Spacing = 6,
-            Children = { appPicker, sitePanel, Caption("While the app runs, its lighting replaces what the devices show; when it closes, they go back.") },
+            Children =
+            {
+                appRowsPanel,
+                addApp,
+                Caption("While any of these apps runs (or a browser shows one of the sites), its lighting replaces what the devices show; when none does, they go back."),
+            },
         };
-        string AppText() => appExe.Trim();
-        string SiteText() => NowPlaying.IsBrowser(appExe) ? NowPlaying.SiteHost(siteBox.Text) : "";
+        // The rows with an app, as (program, site or ""): a site only for a browser.
+        List<(string App, string Site)> Watches() => appRows
+            .Where(r => r.Exe().Length > 0)
+            .Select(r => (r.Exe(), NowPlaying.IsBrowser(r.Exe()) ? NowPlaying.SiteHost(r.Site.Text) : ""))
+            .ToList();
+        // A browser row whose site isn't a host.
+        bool BadSite() => appRows.Any(r => NowPlaying.IsBrowser(r.Exe()) && r.Site.Text.Trim().Length > 0 && NowPlaying.SiteHost(r.Site.Text).Length == 0);
 
         // ---------- 2. Devices ----------
         var picked = new HashSet<string>(t.Targets);
@@ -531,7 +591,7 @@ public sealed partial class MainWindow
             paletteTip.Visibility = palette.Visibility;
             var splitEffect = a == "lighting" && EffectId() is "sound_beat" or "sound_bass" or "sound_spectrum";
             split.Visibility = splitEffect ? Visibility.Visible : Visibility.Collapsed;
-            colorCount.Visibility = splitEffect && PaletteId() == "random" ? Visibility.Visible : Visibility.Collapsed;
+            colorCount.Visibility = soundEffect && PaletteId() == "random" ? Visibility.Visible : Visibility.Collapsed;
             paletteTip.Text = SoundPalettes[Math.Max(0, palette.SelectedIndex)].Tip + ".";
             lightSound.Root.Visibility = palette.Visibility;
             lightSound.Polling = soundEffect;
@@ -696,10 +756,18 @@ public sealed partial class MainWindow
                     src["above"] = Math.Round(above.Value) / 100.0;
                     break;
                 case "app_running":
-                    src["app"] = AppText();
-                    if (SiteText() is { Length: > 0 } site)
+                    // The first app (and site) in "app" / "site", the others in "apps".
+                    var watches = Watches();
+                    src["app"] = watches.Count > 0 ? watches[0].App : "";
+                    if (watches.Count > 0 && watches[0].Site.Length > 0)
                     {
-                        src["site"] = site;
+                        src["site"] = watches[0].Site;
+                    }
+                    if (watches.Count > 1)
+                    {
+                        src["apps"] = new JsonArray([.. watches.Skip(1).Select(w => (JsonNode)(w.Site.Length > 0
+                            ? new JsonObject { ["app"] = w.App, ["site"] = w.Site }
+                            : new JsonObject { ["app"] = w.App }))]);
                     }
                     break;
             }
@@ -798,11 +866,11 @@ public sealed partial class MainWindow
                 {
                     problem = "Record at least one key, or pick \"Any key is pressed\".";
                 }
-                else if (s == "app_running" && NowPlaying.IsBrowser(appExe) && siteBox.Text.Trim().Length > 0 && SiteText().Length == 0)
+                else if (s == "app_running" && BadSite())
                 {
                     problem = "Type the web site's host, like youtube.com, or leave Website empty.";
                 }
-                else if (s == "app_running" && AppText().Length == 0)
+                else if (s == "app_running" && Watches().Count == 0)
                 {
                     problem = "Pick the app, or type its program file (for example game.exe).";
                 }

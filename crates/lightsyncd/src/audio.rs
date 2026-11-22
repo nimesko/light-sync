@@ -9,6 +9,11 @@
 //! 512 samples (~94 times a second), 24 log-spaced bands from 30 Hz to 16 kHz with a perceptual
 //! tilt, per-band automatic gain shown on a dB scale, fast-attack / slow-release smoothing,
 //! falling peaks, and beats from spectral-flux onsets in the bass with an adaptive threshold.
+//!
+//! Loud, compressed music (most electronic music) barely changes level on a dB scale: the bass is
+//! always near the top. So level, bass, mid and treble also get a "punch": how far the sound is above
+//! its own last half second, with a fast release. Kicks, sidechained bass, claps and hi-hats show up
+//! as clear hits there, and the sound effects follow it.
 
 use crate::effects::AudioLevels;
 use rustfft::num_complex::Complex;
@@ -85,9 +90,13 @@ const PEAK_HOLD: f32 = 0.25;
 const PEAK_FALL: f32 = 1.2;
 /// Beats: spectral flux over the bands centred below this frequency (kick drum, bass)...
 const BEAT_MAX_HZ: f32 = 150.0;
-/// ...comparing each band with its value this many analyses earlier (the window spans 4 hops,
-/// so an attack shows up over several analyses)...
-const FLUX_LAG: usize = 2;
+/// ...comparing each band with its average over `ONSET_REF` analyses ending `ONSET_GAP` analyses
+/// earlier (the window spans 4 hops, so an attack shows up over several analyses). Against an
+/// average, a kick's whole rise counts, while the slow swell of a sidechained bass or the beating
+/// of a kick's tail with a bass note (both common in electronic music) stays small...
+const ONSET_GAP: usize = 3;
+const ONSET_REF: usize = 8;
+const ONSET_HIST: usize = ONSET_GAP + ONSET_REF;
 /// ...log-compressed as ln(1 + amplitude / FLUX_REF), so the flux does not depend on loudness...
 const FLUX_REF: f32 = 0.001;
 /// ...above mean + FLUX_K * std of the flux over the last `FLUX_WINDOW` seconds, and above
@@ -95,13 +104,35 @@ const FLUX_REF: f32 = 0.001;
 const FLUX_WINDOW: f32 = 1.0;
 const FLUX_K: f32 = 1.5;
 const FLUX_MIN: f32 = 0.35;
+/// ...(but never more than `FLUX_MEDIAN_ADD` above the median, so one huge hit after a quiet
+/// passage, like the drop after a breakdown, does not hide the kicks that follow it)...
+const FLUX_MEDIAN_ADD: f32 = 0.45;
 /// ...and at least this long after the previous beat (or `TEMPO_GAP` of the tempo's period).
 const BEAT_MIN_GAP: f32 = 0.2;
 const TEMPO_GAP: f32 = 0.45;
+/// With a known tempo, onsets more than this fraction of a period from the beat grid need
+/// `OFF_BEAT_K` times the threshold. Half beats count as on the grid: if the tempo was read at half
+/// speed, the beats in between must still get through (or it would stay at half speed).
+const OFF_BEAT_PHASE: f32 = 0.15;
+const OFF_BEAT_K: f32 = 1.6;
+/// An onset `TAKEOVER_K` times stronger than the last beat, within `TAKEOVER` seconds of it, takes
+/// its place (a new beat unless within `SAME_HIT` seconds: then it is the same hit, re-timed).
+const TAKEOVER: f32 = 0.15;
+const TAKEOVER_K: f32 = 1.5;
+const SAME_HIT: f32 = 0.05;
 /// Tempo: the median of the last intervals between beats within this range (seconds).
 const IOI_MIN: f32 = 0.25;
 const IOI_MAX: f32 = 1.5;
 const IOIS: usize = 8;
+/// Punch: a faster-releasing copy of each meter, compared with its average over `PUNCH_TAU`
+/// seconds; `PUNCH_GAIN` turns that difference into 0..1 around a steady 0.5.
+const PUNCH_RELEASE: f32 = 0.045;
+const PUNCH_TAU: f32 = 0.5;
+const PUNCH_GAIN: f32 = 2.5;
+/// Beat strength: how far the onset rose above the threshold (x 1 .. x `STRENGTH_SPAN`) maps to
+/// `STRENGTH_MIN`..1.
+const STRENGTH_MIN: f32 = 0.55;
+const STRENGTH_SPAN: f32 = 3.0;
 /// Values below this snap to 0 (no denormals, and silence is exactly dark).
 const TINY: f32 = 1.0e-4;
 /// The music's character (`mood`: the centroid) and `energy` (the level) follow over this long.
@@ -122,6 +153,8 @@ struct Rates {
     ref_fall: f32,
     attack: f32,
     release: f32,
+    punch_release: f32,
+    punch_avg: f32,
 }
 
 /// One analyzer channel (a band, or level/bass/mid/treble): automatic gain, dB display scale,
@@ -132,9 +165,19 @@ struct Meter {
     out: f32,
     peak: f32,
     hold: f32,
+    /// Like `out`, releasing faster (follows each hit).
+    fast: f32,
+    /// `fast` averaged over `PUNCH_TAU`.
+    avg: f32,
 }
 
 impl Meter {
+    /// How far the sound is above its last half second: 0.5 when steady, towards 1 on a hit,
+    /// towards 0 in a dip (a sidechained bass between kicks); 0 in silence.
+    fn punch(&self) -> f32 {
+        ((0.5 + PUNCH_GAIN * (self.fast - self.avg)) * (self.fast * 3.0).min(1.0)).clamp(0.0, 1.0)
+    }
+
     fn step(&mut self, raw: f32, floor: f32, r: &Rates) {
         self.reference = (self.reference * r.ref_fall).max(raw).max(floor);
         let x = raw / self.reference;
@@ -143,6 +186,15 @@ impl Meter {
         self.out += (target - self.out) * k;
         if self.out < TINY {
             self.out = 0.0;
+        }
+        let k = if target > self.fast { r.attack } else { r.punch_release };
+        self.fast += (target - self.fast) * k;
+        self.avg += (self.fast - self.avg) * r.punch_avg;
+        if self.fast < TINY {
+            self.fast = 0.0;
+        }
+        if self.avg < TINY {
+            self.avg = 0.0;
         }
         if self.out >= self.peak {
             self.peak = self.out;
@@ -187,14 +239,21 @@ pub struct Analyzer {
     bands: [Meter; BANDS],
     /// Level, bass, mid, treble.
     agg: [Meter; 4],
-    /// Log-compressed beat bands of the last `FLUX_LAG + 1` analyses (a ring).
-    lagged: [[f32; BANDS]; FLUX_LAG + 1],
+    /// Log-compressed beat bands of the last `ONSET_HIST + 1` analyses (a ring; `lag_pos` is the next).
+    lagged: [[f32; BANDS]; ONSET_HIST + 1],
     lag_pos: usize,
-    /// Flux over the last `FLUX_WINDOW` seconds (a ring), and the two latest values.
+    /// Flux over the last `FLUX_WINDOW` seconds (a ring), and the latest value.
     flux: Vec<f32>,
+    /// Scratch space for the median of `flux` (no allocation per analysis).
+    sorted: Vec<f32>,
     flux_pos: usize,
-    flux_prev: [f32; 2],
+    flux_prev: f32,
     since_beat: f32,
+    /// How strong the last beat was, `STRENGTH_MIN`..1.
+    strength: f32,
+    /// The onset value of the last beat, and where its interval went in `iois`.
+    beat_flux: f32,
+    last_ioi: Option<usize>,
     iois: [f32; IOIS],
     ioi_count: usize,
     /// Beats detected so far.
@@ -269,18 +328,29 @@ impl Analyzer {
             bass_end,
             mid_end,
             beat_end: beat_end.max(1),
-            rates: Rates { dt, ref_fall: fall(REF_TAU), attack: 1.0 - fall(ATTACK), release: 1.0 - fall(RELEASE) },
+            rates: Rates {
+                dt,
+                ref_fall: fall(REF_TAU),
+                attack: 1.0 - fall(ATTACK),
+                release: 1.0 - fall(RELEASE),
+                punch_release: 1.0 - fall(PUNCH_RELEASE),
+                punch_avg: 1.0 - fall(PUNCH_TAU),
+            },
             global_fall: fall(GLOBAL_TAU),
             global_ref: REF_FLOOR,
             raw: [0.0; BANDS],
             bands: [Meter::default(); BANDS],
             agg: [Meter::default(); 4],
-            lagged: [[0.0; BANDS]; FLUX_LAG + 1],
+            lagged: [[0.0; BANDS]; ONSET_HIST + 1],
             lag_pos: 0,
             flux: vec![0.0; ((FLUX_WINDOW / dt).round() as usize).max(8)],
+            sorted: vec![0.0; ((FLUX_WINDOW / dt).round() as usize).max(8)],
             flux_pos: 0,
-            flux_prev: [0.0; 2],
+            flux_prev: 0.0,
             since_beat: 1.0e6,
+            strength: 1.0,
+            beat_flux: 0.0,
+            last_ioi: None,
             iois: [0.0; IOIS],
             ioi_count: 0,
             beats: 0,
@@ -400,38 +470,75 @@ impl Analyzer {
             self.ioi_count = 0; // the music stopped or changed: forget the tempo
         }
         let nb = self.beat_end;
+        let len = ONSET_HIST + 1;
         let now = self.lag_pos;
-        let then = (now + 1) % (FLUX_LAG + 1); // the oldest entry: FLUX_LAG analyses ago
         for b in 0..nb {
             self.lagged[now][b] = (1.0 + self.raw[b] / FLUX_REF).ln();
         }
         let mut f = 0.0;
         for b in 0..nb {
-            f += (self.lagged[now][b] - self.lagged[then][b]).max(0.0);
+            let reference = (ONSET_GAP..ONSET_HIST).map(|j| self.lagged[(now + len - j) % len][b]).sum::<f32>() / ONSET_REF as f32;
+            f += (self.lagged[now][b] - reference).max(0.0);
         }
         let f = f / nb as f32;
-        self.lag_pos = then;
+        self.lag_pos = (now + 1) % len;
         self.flux[self.flux_pos] = f;
         self.flux_pos = (self.flux_pos + 1) % self.flux.len();
-        // The previous value is an onset if it is a local maximum above the adaptive threshold.
-        let [prev, prev2] = self.flux_prev;
-        self.flux_prev = [f, prev];
+        // An onset as soon as the rising flux crosses the adaptive threshold (waiting for its peak
+        // would show the beat a hop or two late).
+        let prev = self.flux_prev;
+        self.flux_prev = f;
         let len = self.flux.len() as f32;
         let mean = self.flux.iter().sum::<f32>() / len;
         let var = self.flux.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / len;
-        let threshold = (mean + FLUX_K * var.sqrt()).max(FLUX_MIN);
-        let gap = match self.period() {
+        self.sorted.copy_from_slice(&self.flux);
+        let mid = self.sorted.len() / 2;
+        let median = *self.sorted.select_nth_unstable_by(mid, f32::total_cmp).1;
+        let threshold = (mean + FLUX_K * var.sqrt()).min(median + FLUX_MEDIAN_ADD).max(FLUX_MIN);
+        let period = self.period();
+        let gap = match period {
             Some(p) => BEAT_MIN_GAP.max(TEMPO_GAP * p),
             None => BEAT_MIN_GAP,
         };
-        if prev > threshold && prev >= prev2 && prev > f && self.since_beat >= gap {
+        // Once the tempo is known, an onset far from where the next beat is due (a bass note on a
+        // 16th, a clap) has to be clearly stronger to count.
+        let threshold = match period {
+            Some(p) if {
+                let halves = self.since_beat / (0.5 * p);
+                0.5 * (halves - halves.round()).abs() > OFF_BEAT_PHASE
+            } => threshold * OFF_BEAT_K,
+            _ => threshold,
+        };
+        let rising = f > threshold && f >= prev;
+        if rising && self.since_beat >= gap {
+            self.last_ioi = None;
             if (IOI_MIN..=IOI_MAX).contains(&self.since_beat) {
+                self.last_ioi = Some(self.ioi_count % IOIS);
                 self.iois[self.ioi_count % IOIS] = self.since_beat;
                 self.ioi_count += 1;
             }
             self.since_beat = 0.0;
             self.beats += 1;
+            self.beat_flux = f;
+            self.set_strength(f, threshold);
+        } else if rising && self.since_beat < TAKEOVER && f > self.beat_flux * TAKEOVER_K {
+            // A much stronger onset right after a weak one (the kick after a bass note just before
+            // it): the beat is this one. Moments apart it is the same hit, only re-timed.
+            if self.since_beat >= SAME_HIT {
+                self.beats += 1;
+            }
+            if let Some(i) = self.last_ioi {
+                self.iois[i] += self.since_beat;
+            }
+            self.since_beat = 0.0;
+            self.beat_flux = f;
+            self.set_strength(f, threshold);
         }
+    }
+
+    fn set_strength(&mut self, f: f32, threshold: f32) {
+        let over = ((f / threshold - 1.0) / (STRENGTH_SPAN - 1.0)).clamp(0.0, 1.0);
+        self.strength = STRENGTH_MIN + (1.0 - STRENGTH_MIN) * over;
     }
 
     /// The beat period (seconds) once a steady tempo has been heard: the median of the last
@@ -456,6 +563,12 @@ impl Analyzer {
             level_peak: self.agg[0].peak,
             beat: self.since_beat < AudioLevels::BEAT_HOLD,
             beat_age: self.since_beat,
+            beat_strength: self.strength,
+            beat_count: self.beats as u32,
+            level_punch: self.agg[0].punch(),
+            bass_punch: self.agg[1].punch(),
+            mid_punch: self.agg[2].punch(),
+            treble_punch: self.agg[3].punch(),
             bands: self.bands.map(|m| m.out),
             peaks: self.bands.map(|m| m.peak),
             centroid: self.centroid,
@@ -1003,6 +1116,124 @@ mod tests {
         }
         let ran = a.levels().phase - before;
         assert!(ran > 1.0 && ran < 9.0, "phase ran {ran} over 2 s at 2 beats/s");
+    }
+
+    /// A loud, compressed electronic track at 128 BPM: a four-on-the-floor kick (a pitch-dropping
+    /// sine with a click), a sawtooth bass sidechained to the kick, open hi-hats on the offbeats,
+    /// a clap on beats 2 and 4, and a pad. `rolling`: the bass plays every 16th note instead.
+    fn edm(beats: usize, rolling: bool) -> Vec<f32> {
+        let rate = RATE as f32;
+        let beat = 60.0 / 128.0;
+        let n = (beats as f32 * beat * rate) as usize;
+        let mut seed = 7u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 23) as f32 - 1.0
+        };
+        let (mut kick_phase, mut prev_noise) = (0.0f32, 0.0f32);
+        let mut out = Vec::with_capacity(n);
+        for k in 0..n {
+            let t = k as f32 / rate;
+            let in_beat = t % beat;
+            let nth = (t / beat) as usize;
+            // Kick: 110 Hz falling to 45 Hz, ~0.15 s decay, a short click on top.
+            let f = 45.0 + 65.0 * (-in_beat / 0.03).exp();
+            kick_phase = (kick_phase + std::f32::consts::TAU * f / rate) % std::f32::consts::TAU;
+            let white = noise();
+            let kick = 0.9 * (-in_beat / 0.15).exp() * kick_phase.sin() + 0.15 * (-in_beat / 0.004).exp() * white;
+            // Bass: a 55 Hz saw ducked by the kick (sidechain), or plucked on every 16th note.
+            let saw = 2.0 * (t * 55.0).fract() - 1.0;
+            let duck = if rolling { (-(t % (beat / 4.0)) / 0.06).exp() } else { 1.0 - (-in_beat / 0.12).exp() };
+            let bass = 0.35 * saw * duck;
+            // Hi-hat: high-passed noise on the offbeat, 40 ms decay.
+            let hp = white - prev_noise;
+            prev_noise = white;
+            let off = (in_beat - beat / 2.0).max(0.0);
+            let hat = if in_beat >= beat / 2.0 { 0.12 * (-off / 0.04).exp() * hp } else { 0.0 };
+            // Clap on 2 and 4: mid noise burst.
+            let clap = if nth % 2 == 1 { 0.25 * (-in_beat / 0.06).exp() * white } else { 0.0 };
+            let pad = 0.05 * (std::f32::consts::TAU * 440.0 * t).sin() + 0.04 * (std::f32::consts::TAU * 660.0 * t).sin();
+            out.push((kick + bass + hat + clap + pad).clamp(-1.0, 1.0));
+        }
+        out
+    }
+
+    /// Feeds `samples` in 10 ms chunks; calls `f(time, levels, new_beat)` after each.
+    fn play(a: &mut Analyzer, samples: &[f32], mut f: impl FnMut(f32, &AudioLevels, bool)) {
+        let mut t = 0.0;
+        for part in samples.chunks(480) {
+            let before = a.beats;
+            a.push(part, 1);
+            t += part.len() as f32 / RATE as f32;
+            f(t, &a.levels(), a.beats > before);
+        }
+    }
+
+    #[test]
+    fn electronic_music_hits_on_every_kick() {
+        let beat = 60.0 / 128.0;
+        for rolling in [false, true] {
+            let mut a = Analyzer::new(RATE);
+            let mut beats = Vec::new();
+            // Punch just after each kick vs. just before the next one (past the warm-up).
+            let (mut on_kick, mut before_kick, mut hat_on, mut hat_before) = (vec![], vec![], vec![], vec![]);
+            play(&mut a, &edm(32, rolling), |t, l, new| {
+                // The first second is the warm-up (no tempo yet): from then on, kicks 3..31.
+                if new && t > 1.2 {
+                    beats.push(t);
+                }
+                if t < 2.0 {
+                    return;
+                }
+                let x = t % beat;
+                if (0.02..0.05).contains(&x) {
+                    on_kick.push(l.bass_punch);
+                }
+                if x > beat - 0.04 {
+                    before_kick.push(l.bass_punch);
+                }
+                if (beat / 2.0 + 0.01..beat / 2.0 + 0.03).contains(&x) {
+                    hat_on.push(l.treble_punch);
+                }
+                if (beat / 2.0 - 0.04..beat / 2.0 - 0.01).contains(&x) {
+                    hat_before.push(l.treble_punch);
+                }
+            });
+            let avg = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+            let label = if rolling { "rolling bass" } else { "sidechained bass" };
+            eprintln!(
+                "{label}: {} beats, bass punch on kick {:.2} / before {:.2}, treble punch on hat {:.2} / before {:.2}, tempo {:.1}",
+                beats.len(), avg(&on_kick), avg(&before_kick), avg(&hat_on), avg(&hat_before), a.levels().tempo * 60.0
+            );
+            // One beat per kick, on the kick (within 50 ms), nothing on the bass notes, hats or claps.
+            assert_eq!(beats.len(), 29, "{label}: beats at {beats:?}");
+            assert!(beats.iter().all(|t| t % beat < 0.05), "{label}: off-kick beats {beats:?}");
+            assert!((a.levels().tempo * 60.0 - 128.0).abs() < 4.0, "{label}: tempo {}", a.levels().tempo * 60.0);
+            // The bass punches on the kick and falls back before the next.
+            assert!(avg(&on_kick) > 0.75 && avg(&before_kick) < 0.45, "{label}: bass punch {} / {}", avg(&on_kick), avg(&before_kick));
+            // Hi-hats show in the treble punch.
+            assert!(avg(&hat_on) > avg(&hat_before) + 0.2, "{label}: treble punch {} / {}", avg(&hat_on), avg(&hat_before));
+        }
+        // Accented kicks (loud, soft, loud, soft at 120 BPM): every kick is a beat, the tempo is not
+        // read at half speed.
+        let mut a = Analyzer::new(RATE);
+        let mut n = 0;
+        for k in 0..24 {
+            let before = a.beats;
+            a.push(&kick(if k % 2 == 0 { 0.9 } else { 0.4 }, 0.5), 1);
+            if k >= 4 && a.beats > before {
+                n += 1;
+            }
+        }
+        assert!(n >= 19, "{n} of 20 accented kicks");
+        assert!((a.levels().tempo * 60.0 - 120.0).abs() < 5.0, "tempo {}", a.levels().tempo * 60.0);
+        // Without the music's dynamics (a steady tone) the punch rests at the middle.
+        let mut a = Analyzer::new(RATE);
+        a.push(&tone(60.0, 0.5, 3.0, 1), 1);
+        let p = a.levels().bass_punch;
+        assert!((0.4..0.6).contains(&p), "steady punch {p}");
+        a.push_silence(RATE as usize);
+        assert_eq!(a.levels().bass_punch, 0.0);
     }
 
     #[test]

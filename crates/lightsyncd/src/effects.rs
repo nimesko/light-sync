@@ -116,6 +116,31 @@ impl Effect {
     }
 }
 
+/// The colors a sound reactive effect uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Palette {
+    /// The effect's own colors: the chosen color, or the effect's built-in ones.
+    #[default]
+    Effect,
+    /// Every color of the rainbow along each device, drifting with the music.
+    Rainbow,
+    /// A new random color on every beat.
+    Random,
+    /// By intensity: blue when quiet, through cyan, green and yellow, to red at the loudest.
+    ColdHot,
+    /// By intensity: deep red when quiet, to orange, yellow and white-hot at the loudest.
+    Fire,
+    /// Neon pink and cyan along each device, swapping on every beat.
+    Neon,
+}
+
+impl Palette {
+    pub fn parse(s: &str) -> Option<Palette> {
+        serde_json::from_value(serde_json::Value::String(s.into())).ok()
+    }
+}
+
 /// What the user picked; persisted between runs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -127,11 +152,13 @@ pub struct LightState {
     pub brightness: u8,
     /// 1..=100
     pub speed: u8,
+    /// Colors of the sound reactive effects (the others ignore it).
+    pub palette: Palette,
 }
 
 impl Default for LightState {
     fn default() -> Self {
-        Self { effect: Effect::Static, color: "ffffff".into(), brightness: 100, speed: 50 }
+        Self { effect: Effect::Static, color: "ffffff".into(), brightness: 100, speed: 50, palette: Palette::Effect }
     }
 }
 
@@ -155,6 +182,17 @@ pub struct AudioLevels {
     /// A beat was detected very recently (within `BEAT_HOLD` seconds).
     pub beat: bool,
     pub beat_age: f32,
+    /// How strong the last beat was, about 0.55 (a soft one) .. 1 (a hard kick).
+    pub beat_strength: f32,
+    /// Beats so far (wraps); a new value means a new beat.
+    pub beat_count: u32,
+    /// How far level, bass, mid and treble are above their last half second, 0..1: 0.5 while steady,
+    /// near 1 on a hit (kick, clap, hi-hat), near 0 in a dip. Loud music that hardly changes level
+    /// still punches here.
+    pub level_punch: f32,
+    pub bass_punch: f32,
+    pub mid_punch: f32,
+    pub treble_punch: f32,
     /// Spectrum analyzer: `BANDS` log-spaced bands (about 30 Hz to 16 kHz), each 0..1.
     pub bands: [f32; AudioLevels::BANDS],
     /// Slowly falling peak of each band, 0..1 (for analyzer displays).
@@ -185,6 +223,12 @@ impl AudioLevels {
         level_peak: 0.0,
         beat: false,
         beat_age: 1.0e6,
+        beat_strength: 1.0,
+        beat_count: 0,
+        level_punch: 0.0,
+        bass_punch: 0.0,
+        mid_punch: 0.0,
+        treble_punch: 0.0,
         bands: [0.0; AudioLevels::BANDS],
         peaks: [0.0; AudioLevels::BANDS],
         centroid: 0.0,
@@ -280,6 +324,41 @@ fn sensitivity(speed: f32) -> f32 {
     lerp(0.5, 2.0, speed)
 }
 
+/// How much of a sound effect's drive is the punch (the hits) rather than the plain level.
+const PUNCH_MIX: f32 = 0.65;
+
+/// What a sound effect follows for one meter, 0..1: its level mixed with its punch (see
+/// [`AudioLevels::bass_punch`]), so kicks, claps and hi-hats stand out even in loud, compressed
+/// music, times the sensitivity.
+fn drive(level: f32, punch: f32, sens: f32) -> f32 {
+    ((PUNCH_MIX * punch + (1.0 - PUNCH_MIX) * level) * sens).clamp(0.0, 1.0)
+}
+
+/// Repaint a sound effect's color `c` with a palette, keeping its brightness. `heat` (0..1) is
+/// how intense the sound is at this LED (for the palettes by intensity).
+fn recolor(c: Color, palette: Palette, heat: f32, audio: &AudioLevels, pos: f32) -> Color {
+    let (_, s, v) = to_hsv(c);
+    let heat = heat.clamp(0.0, 1.0);
+    // Whitish highlights (peak dots, sparkles) stay a little paler than the rest.
+    let s = 0.7 + 0.3 * s;
+    match palette {
+        Palette::Effect => c,
+        // One turn of the wheel along the device; it moves on a twentieth of a turn per beat.
+        Palette::Rainbow => hsv(pos + 0.05 * audio.phase, s, v),
+        Palette::Random => {
+            // Golden-ratio steps: each beat's color is far from the last one.
+            let k = audio.beat_count;
+            hsv(k as f32 * 0.618_034 + 0.25 * hash(k, 0x5EED) + 0.03 * (pos - 0.5), s, v)
+        }
+        Palette::ColdHot => hsv(lerp(0.66, 0.0, heat), s, v),
+        Palette::Fire => hsv(lerp(0.0, 0.14, heat), s * lerp(1.0, 0.45, heat * heat), v),
+        Palette::Neon => {
+            let half = (pos * 2.0).min(1.0) as u32;
+            hsv(if (half + audio.beat_count).is_multiple_of(2) { 0.92 } else { 0.5 }, s, v)
+        }
+    }
+}
+
 /// Hue for a position 0..1 along the analyzer bands: red bass through to violet treble.
 fn band_hue(x: f32) -> f32 {
     lerp(0.0, 0.78, x.clamp(0.0, 1.0))
@@ -330,6 +409,8 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
     let speed = state.speed.clamp(1, 100) as f32 / 100.0;
     let pos = if n > 1 { i as f32 / n as f32 } else { 0.0 };
     let base = state.base_color();
+    // How intense the sound is at this LED, for the palettes by intensity (sound effects set it).
+    let mut heat = audio.level;
     let c = match state.effect {
         Effect::Static => base,
         Effect::Breathing => {
@@ -543,9 +624,9 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
             hsv(if w >= 0.0 { h } else { h + 0.5 }, s, w.abs().powf(0.6) * glow)
         }
         Effect::SoundPulse => {
-            // The level is already smoothed (fast attack, slower release); squaring it gives the
-            // glow more contrast between quiet and loud.
-            let k = (audio.level * sensitivity(speed)).clamp(0.0, 1.0);
+            // Level and punch; squaring gives the glow more contrast between quiet and loud.
+            let k = drive(audio.level, audio.level_punch, sensitivity(speed));
+            heat = k;
             mul(base, 0.03 + 0.97 * k * k)
         }
         Effect::SpectrumBars => {
@@ -566,6 +647,7 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
                 let (value, peak) = (max(&audio.bands[b0..b1]), max(&audio.peaks[b0..b1]));
                 let hue = band_hue((b0 + b1 - 1) as f32 / 2.0 / (AudioLevels::BANDS - 1) as f32);
                 let local = i - start;
+                heat = value;
                 // Peak-hold dot: the LED the peak reached, when it is above the bar.
                 let top = (peak * len as f32).ceil() as usize;
                 if len >= 4 && peak > 0.02 && top >= 1 && local == top - 1 && peak > value + 0.5 / len as f32 {
@@ -577,9 +659,12 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
             }
         }
         Effect::BeatFlash => {
-            // Full on each beat, fading at a rate set by the speed; a faint glow with the bass.
-            let k = (-audio.beat_age.max(0.0) * lerp(2.0, 12.0, speed)).exp();
-            mul(base, 0.03 + 0.97 * k.max(0.2 * audio.bass * audio.bass))
+            // A flash on each beat, as bright as the beat is strong, fading at a rate set by the
+            // speed; a faint glow with the bass hits in between.
+            let k = (-audio.beat_age.max(0.0) * lerp(2.0, 12.0, speed)).exp() * audio.beat_strength;
+            let glow = 0.25 * audio.bass_punch * audio.bass_punch;
+            heat = k;
+            mul(base, 0.03 + 0.97 * k.max(glow))
         }
         Effect::SpectrumAnalyzer => {
             let sens = sensitivity(speed);
@@ -588,11 +673,13 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
             } else {
                 let x = i as f32 / (n - 1) as f32;
                 let v = (band_at(&audio.bands, x) * sens).clamp(0.0, 1.0);
+                heat = v;
                 hsv(band_hue(x), 1.0, 0.03 + 0.97 * v * v)
             }
         }
         Effect::BassGlow => {
-            let b = (audio.bass * sensitivity(speed)).clamp(0.0, 1.0);
+            let b = drive(audio.bass, audio.bass_punch, sensitivity(speed));
+            heat = b;
             // Each beat pushes the hue along the wheel; it eases back over half a second or so.
             let shift = BEAT_HUE_SHIFT * (-audio.beat_age.max(0.0) * 4.0).exp();
             let (h, s, v) = to_hsv(base);
@@ -606,6 +693,7 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
                 hsv(vu_hue(level), 1.0, 0.03 + 0.97 * level)
             } else {
                 let x = (i as f32 + 0.5) / n as f32;
+                heat = x;
                 let top = (peak * n as f32).ceil() as usize;
                 if n >= 4 && peak > 0.02 && top >= 1 && i == top - 1 && peak > level + 0.5 / n as f32 {
                     hsv(vu_hue(x), 1.0, 1.0)
@@ -617,8 +705,9 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
         }
         Effect::BassTreble => {
             let sens = sensitivity(speed);
-            let bass = (audio.bass * sens).clamp(0.0, 1.0);
-            let treble = (audio.treble * sens).clamp(0.0, 1.0);
+            let bass = drive(audio.bass, audio.bass_punch, sens);
+            let treble = drive(audio.treble, audio.treble_punch, sens);
+            heat = bass;
             // Warm bass glow, fullest at the start of the device and rising further with the bass.
             let reach = if n > 1 { (bass * 1.2 - pos).clamp(0.0, 1.0).max(0.25 * bass) } else { bass };
             let warm = hsv(0.97 + 0.05 * bass, 1.0, reach * reach);
@@ -629,8 +718,9 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
         }
         Effect::TrebleSparkle => {
             let sens = sensitivity(speed);
-            let bass = (audio.bass * sens).clamp(0.0, 1.0);
-            let treble = (audio.treble * sens).clamp(0.0, 1.0);
+            let bass = drive(audio.bass, audio.bass_punch, sens);
+            let treble = drive(audio.treble, audio.treble_punch, sens);
+            heat = treble;
             // A sparkle lasts a few frames and fades; how many LEDs sparkle follows the treble.
             let rate = 14.0;
             let slot = (t * rate).floor() as u32;
@@ -648,9 +738,10 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
             let front = audio.beat_age.max(0.0) * travel;
             let x = if n > 1 { (pos + 0.5 / n as f32 - 0.5).abs() * 2.0 } else { 0.0 };
             const WIDTH: f32 = 0.35;
-            let wave = (1.0 - (x - front).abs() / WIDTH).max(0.0) * (1.0 - front / 1.6).max(0.0);
-            let glow = 0.04 + 0.2 * audio.bass * audio.bass;
+            let wave = (1.0 - (x - front).abs() / WIDTH).max(0.0) * (1.0 - front / 1.6).max(0.0) * audio.beat_strength;
+            let glow = 0.04 + 0.2 * audio.bass_punch * audio.bass_punch;
             let (h, s, _) = to_hsv(base);
+            heat = glow.max(wave);
             hsv(h + 0.04 * audio.bass, s, glow.max(wave))
         }
         Effect::MusicFlow => {
@@ -666,13 +757,15 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
             let w2 = (std::f32::consts::TAU * (pos * 0.7 + audio.phase * 0.11)).sin();
             let hue = centre + spread * (0.7 * w + 0.3 * w2) + 0.08 * (audio.centroid - mood);
             // Calm: soft pastel and dim; energetic: saturated and bright; a kick on each beat.
-            let kick = (-audio.beat_age.max(0.0) * 6.0).exp() * (0.3 + 0.7 * energy);
+            let kick = (-audio.beat_age.max(0.0) * 6.0).exp() * (0.3 + 0.7 * energy) * audio.beat_strength;
             let sat = lerp(0.45, 1.0, energy);
             let v = (0.12 + 0.55 * energy + 0.25 * (0.5 + 0.5 * w) * energy + 0.35 * kick).min(1.0);
-            let level = (audio.level * sens).clamp(0.0, 1.0);
+            let level = drive(audio.level, audio.level_punch, sens);
+            heat = v;
             hsv(hue, sat, v * (0.35 + 0.65 * level.max(energy)))
         }
     };
+    let c = if state.effect.is_audio() { recolor(c, state.palette, heat, audio, pos) } else { c };
     mul(c, state.brightness.min(100) as f32 / 100.0)
 }
 
@@ -681,7 +774,7 @@ mod tests {
     use super::*;
 
     fn st(effect: Effect) -> LightState {
-        LightState { effect, color: "ff0000".into(), brightness: 100, speed: 50 }
+        LightState { effect, color: "ff0000".into(), brightness: 100, speed: 50, palette: Palette::Effect }
     }
 
     #[test]
@@ -767,7 +860,80 @@ mod tests {
     }
 
     fn sound(level: f32, bass: f32, mid: f32, treble: f32, beat_age: f32) -> AudioLevels {
-        AudioLevels { level, bass, mid, treble, beat: beat_age < AudioLevels::BEAT_HOLD, beat_age, ..AudioLevels::SILENT }
+        AudioLevels {
+            level,
+            bass,
+            mid,
+            treble,
+            beat: beat_age < AudioLevels::BEAT_HOLD,
+            beat_age,
+            // Hits as strong as the levels.
+            level_punch: level,
+            bass_punch: bass,
+            mid_punch: mid,
+            treble_punch: treble,
+            ..AudioLevels::SILENT
+        }
+    }
+
+    #[test]
+    fn punch_drives_the_sound_effects() {
+        // Loud, compressed music: the level hardly changes, the punch does. The kick lights up,
+        // the dip between kicks is dark, even though the level is high in both.
+        let s = st(Effect::BassGlow);
+        let kick = AudioLevels { bass: 0.95, bass_punch: 0.95, ..AudioLevels::SILENT };
+        let dip = AudioLevels { bass: 0.8, bass_punch: 0.1, ..AudioLevels::SILENT };
+        let (k, d) = (render_with(&s, 0.0, 0, 10, &kick).r, render_with(&s, 0.0, 0, 10, &dip).r);
+        assert!(k > 200 && d < 80, "kick {k} dip {d}");
+        // Beat flash: a soft beat flashes less than a hard one.
+        let f = |strength: f32| render_with(&st(Effect::BeatFlash), 0.0, 0, 10, &AudioLevels { beat_age: 0.0, beat_strength: strength, ..AudioLevels::SILENT }).r;
+        assert!(f(1.0) == 255 && f(0.55) < 160, "{} {}", f(1.0), f(0.55));
+    }
+
+    #[test]
+    fn palettes_recolor_sound_effects() {
+        let with = |palette: Palette| LightState { palette, ..st(Effect::SoundPulse) };
+        let loud = sound(1.0, 1.0, 1.0, 1.0, 9.0);
+        let quiet = sound(0.25, 0.25, 0.25, 0.25, 9.0);
+        // The effect's own colors by default: the chosen red.
+        assert_eq!(render_with(&with(Palette::Effect), 0.0, 0, 10, &loud), Color::new(255, 0, 0));
+        // Cold to hot: loud is red, quieter is bluer.
+        let (hot, cold) = (render_with(&with(Palette::ColdHot), 0.0, 0, 10, &loud), render_with(&with(Palette::ColdHot), 0.0, 0, 10, &quiet));
+        let (hh, _, _) = to_hsv(hot);
+        let (hc, _, _) = to_hsv(cold);
+        assert!(hh < 0.05 && hc > 0.3, "hot hue {hh} cold hue {hc}");
+        // Fire: loud is yellow-white, quiet deep red.
+        let fire = |a: &AudioLevels| render_with(&with(Palette::Fire), 0.0, 0, 10, a);
+        assert!(fire(&loud).g > 150 && fire(&loud).b > 50, "{:?}", fire(&loud));
+        assert!(fire(&quiet).r > fire(&quiet).g * 2, "{:?}", fire(&quiet));
+        // Random: a different color on each beat, the same within one.
+        let beat = |k: u32| render_with(&with(Palette::Random), 0.0, 0, 10, &AudioLevels { beat_count: k, ..loud });
+        assert_eq!(beat(3), beat(3));
+        assert!((0..8).all(|k| beat(k) != beat(k + 1)), "colors repeat");
+        let hues: Vec<f32> = (0..8).map(|k| to_hsv(beat(k)).0).collect();
+        assert!(hues.windows(2).all(|w| { let d = (w[0] - w[1]).abs(); d.min(1.0 - d) > 0.12 }), "{hues:?}");
+        // Rainbow: every hue along the device, drifting with the music's clock.
+        let rainbow = |i: usize, phase: f32| to_hsv(render_with(&with(Palette::Rainbow), 0.0, i, 12, &AudioLevels { phase, ..loud })).0;
+        let along: Vec<f32> = (0..12).map(|i| rainbow(i, 0.0)).collect();
+        assert!(along.windows(2).all(|w| w[0] != w[1]) && (along[6] - 0.5).abs() < 0.03, "{along:?}");
+        assert!((rainbow(0, 2.0) - 0.1).abs() < 0.02, "drifts {}", rainbow(0, 2.0));
+        // Neon: pink and cyan halves, swapping on the beat.
+        let neon = |i: usize, k: u32| to_hsv(render_with(&with(Palette::Neon), 0.0, i, 10, &AudioLevels { beat_count: k, ..loud })).0;
+        assert!((neon(0, 0) - 0.92).abs() < 0.02 && (neon(9, 0) - 0.5).abs() < 0.02 && (neon(0, 1) - 0.5).abs() < 0.02);
+        // Brightness is kept, silence stays dark, and other effects ignore the palette.
+        let dim = |p| bright(render_with(&with(p), 0.0, 0, 10, &quiet));
+        assert!([Palette::Rainbow, Palette::Random, Palette::ColdHot, Palette::Fire, Palette::Neon].iter().all(|&p| dim(p).abs_diff(dim(Palette::Effect)) < 12));
+        assert!(bright(render(&with(Palette::ColdHot), 0.0, 0, 10)) < 15);
+        let fixed = LightState { palette: Palette::Random, ..st(Effect::Static) };
+        assert_eq!(render(&fixed, 0.0, 0, 1), Color::new(255, 0, 0));
+        // Every sound effect takes a palette.
+        for e in [Effect::SpectrumBars, Effect::SpectrumAnalyzer, Effect::VuMeter, Effect::BassTreble, Effect::MusicFlow, Effect::BassWave] {
+            let a = render_with(&LightState { palette: Palette::Effect, ..st(e) }, 0.0, 2, 12, &loud);
+            let b = render_with(&LightState { palette: Palette::Neon, ..st(e) }, 0.0, 2, 12, &loud);
+            assert!(bright(a) < 20 || a != b, "{e:?} ignores the palette");
+        }
+        assert_eq!(Palette::parse("cold_hot"), Some(Palette::ColdHot));
+        assert_eq!(Palette::parse("nope"), None);
     }
 
     #[test]
@@ -939,14 +1105,14 @@ mod tests {
     fn music_following_effects() {
         let s = |e| LightState { speed: 34, color: "00aaff".into(), ..st(e) };
         // Bass & treble: bass lights the start warm; treble adds sparkles across the device.
-        let bass = AudioLevels { bass: 1.0, ..AudioLevels::SILENT };
+        let bass = AudioLevels { bass: 1.0, bass_punch: 1.0, ..AudioLevels::SILENT };
         let c = render_with(&s(Effect::BassTreble), 0.0, 0, 20, &bass);
         assert!(c.r > 150 && c.b < 120, "warm bass at the start: {c:?}");
-        let treble = AudioLevels { treble: 1.0, ..AudioLevels::SILENT };
+        let treble = AudioLevels { treble: 1.0, treble_punch: 1.0, ..AudioLevels::SILENT };
         let lit = (0..40).filter(|&i| bright(render_with(&s(Effect::BassTreble), 0.0, i, 40, &treble)) > 60).count();
         assert!(lit > 5 && lit < 40, "some sparkles, not all: {lit}");
         // Treble sparkle: more treble, more sparkles.
-        let count = |tr: f32| (0..60).filter(|&i| bright(render_with(&s(Effect::TrebleSparkle), 0.03, i, 60, &AudioLevels { treble: tr, ..AudioLevels::SILENT })) > 100).count();
+        let count = |tr: f32| (0..60).filter(|&i| bright(render_with(&s(Effect::TrebleSparkle), 0.03, i, 60, &AudioLevels { treble: tr, treble_punch: tr, ..AudioLevels::SILENT })) > 100).count();
         assert!(count(1.0) > count(0.3), "{} vs {}", count(1.0), count(0.3));
         // Bass wave: right after a beat the middle is lit, the ends not yet; later the ends.
         let beat = |age: f32| AudioLevels { beat_age: age, bass: 0.5, ..AudioLevels::SILENT };

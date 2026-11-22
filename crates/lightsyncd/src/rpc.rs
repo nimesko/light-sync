@@ -5,14 +5,15 @@
 //! - `status` -> `{ effect, color, brightness, speed, connected, error }` (the "all" state)
 //! - `devices` / `rescan` -> `[DeviceInfo]` with stable ids, zones, fans and `hidden: bool`
 //! - `get_target { target }` -> the state that target currently shows
-//! - `set_state { target?, effect?, color?, brightness?, speed? }` -> applied within one frame;
+//! - `set_state { target?, effect?, color?, brightness?, speed?, palette? }` -> applied within one frame;
 //!   effects: see effects.rs (snake_case names, e.g. static, breathing, rainbow_wave, heartbeat);
 //!   sound reactive: sound_pulse, spectrum_bars, beat_flash (sound is captured only while one of
-//!   them is visible; their `speed` is sensitivity, or how fast beat_flash fades)
+//!   them is visible; their `speed` is sensitivity, or how fast beat_flash fades; `palette` recolors
+//!   them: effect (their own colors), rainbow, random, cold_hot, fire, neon)
 //! - `groups` -> `[Group]`; `save_group { id?, name, members }` -> Group; `delete_group { id }`
 //! - `set_layout { zone, fans, leds_per_fan }` -> split an addressable header into fans (fans 0 = remove)
 //! - `set_color { color }`, `set_brightness { brightness }` -> shortcuts for `set_state` on "all"
-//! - `get_targets { targets: [id] }` -> `{ id: { effect, color, brightness, speed, own, mixed, on } }`
+//! - `get_targets { targets: [id] }` -> `{ id: { effect, color, brightness, speed, palette, own, mixed, on } }`
 //!   (what each target shows now; `mixed` = a group whose members differ)
 //! - `reset { profiles? }` -> back to defaults: no overrides, groups, fan layouts or triggers
 //!   (profiles are kept unless `profiles` is true; hidden devices stay hidden)
@@ -25,7 +26,8 @@
 //! - `audio_status` -> `{ active, device, level }`: whether sound is being captured (an audio
 //!   effect or an enabled audio trigger is visible), the output device captured (null if none
 //!   yet) and the current level 0..1
-//! - `audio_spectrum` -> `{ active, device, level, bass, mid, treble, beat, bands: [24], peaks: [24] }`
+//! - `audio_spectrum` -> `{ active, device, level, bass, mid, treble, beat, bands: [24], peaks: [24],
+//!   tempo_bpm, mood, energy, punch: { level, bass, mid, treble }, beat_strength }`
 //!   (levels 0..1; zeros while nothing is captured; `device` is the Windows output device captured)
 //! - `hidden` -> `[id]`; `set_hidden { id, hidden }` -> `{ hidden: [id] }`: hidden devices are
 //!   never written (no mode change, no frames, no triggers); their other software keeps them.
@@ -62,7 +64,7 @@
 //!   at the mouse wheel / logo for mouse events, and reaches only that far.
 
 use crate::audio::{AudioSource, NoAudio};
-use crate::effects::{self, AudioLevels, Effect, LightState};
+use crate::effects::{self, AudioLevels, Effect, LightState, Palette};
 use crate::scene::{FanLayout, Group, Scene};
 use crate::triggers::{self, Engine, Input, MouseButton, Overlay, Trigger};
 use anyhow::{anyhow, bail, Result};
@@ -220,7 +222,7 @@ fn hex(c: Color) -> String {
 }
 
 fn state_json(s: &LightState) -> Value {
-    json!({"effect": s.effect, "color": s.color, "brightness": s.brightness, "speed": s.speed})
+    json!({"effect": s.effect, "color": s.color, "brightness": s.brightness, "speed": s.speed, "palette": s.palette})
 }
 
 impl<L: Lights> Daemon<L> {
@@ -521,6 +523,12 @@ impl<L: Lights> Daemon<L> {
         if let Some(v) = p.get("speed") {
             next.speed = percent(v, "speed", 1)?;
         }
+        if let Some(v) = p.get("palette") {
+            let name = v
+                .as_str()
+                .ok_or_else(|| anyhow!("'palette' must be a string"))?;
+            next.palette = Palette::parse(name).ok_or_else(|| anyhow!("unknown palette '{name}'"))?;
+        }
         let before = self.scene.clone();
         self.scene.off = false;
         if target == "all" {
@@ -637,6 +645,8 @@ impl<L: Lights> Daemon<L> {
                     "active": active, "device": s.device, "level": l.level, "bass": l.bass, "mid": l.mid,
                     "treble": l.treble, "beat": l.beat, "bands": l.bands.to_vec(), "peaks": l.peaks.to_vec(),
                     "tempo_bpm": (l.tempo * 60.0).round(), "mood": l.mood, "energy": l.energy,
+                    "punch": { "level": l.level_punch, "bass": l.bass_punch, "mid": l.mid_punch, "treble": l.treble_punch },
+                    "beat_strength": if l.beat { l.beat_strength } else { 0.0 },
                 }))
             }
             "hidden" => Ok(json!(self.scene.hidden)),
@@ -987,7 +997,7 @@ mod tests {
     #[tokio::test]
     async fn audio_is_captured_only_while_an_audio_effect_is_visible() {
         let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let loud = AudioLevels { level: 1.0, bass: 1.0, mid: 1.0, treble: 1.0, beat: true, beat_age: 0.0, ..AudioLevels::SILENT };
+        let loud = AudioLevels { level: 1.0, bass: 1.0, mid: 1.0, treble: 1.0, beat: true, beat_age: 0.0, level_punch: 1.0, ..AudioLevels::SILENT };
         let audio = FakeAudio { active: active.clone(), levels: loud };
         let mut d = Daemon::new(Fake::default(), None).with_audio(Box::new(audio));
         let on = || active.load(std::sync::atomic::Ordering::SeqCst);
@@ -1310,7 +1320,22 @@ mod tests {
         )
         .await["error"]
             .is_object());
+        assert!(call(&mut d, r#"{"id":1,"method":"set_state","params":{"palette":"plaid"}}"#).await["error"].is_object());
         assert_eq!(d.scene, Scene::default());
+    }
+
+    #[tokio::test]
+    async fn sound_palette_is_set_and_kept() {
+        let mut d = Daemon::new(Fake::default(), None);
+        let r = call(&mut d, r#"{"id":1,"method":"set_state","params":{"effect":"bass_glow","palette":"cold_hot"}}"#).await;
+        assert_eq!(r["result"]["palette"], json!("cold_hot"));
+        // Other changes keep it; it is saved with the scene.
+        let r = call(&mut d, r#"{"id":2,"method":"set_state","params":{"speed":80}}"#).await;
+        assert_eq!(r["result"]["palette"], json!("cold_hot"));
+        assert_eq!(Scene::from_json(&serde_json::to_string(&d.scene).unwrap()).unwrap().default.palette, Palette::ColdHot);
+        // Older saved states (no palette) load with the effect's own colors.
+        let old = Scene::from_json(r#"{"default":{"effect":"bass_glow","color":"ff0000","brightness":50,"speed":50}}"#).unwrap();
+        assert_eq!(old.default.palette, Palette::Effect);
     }
 
     #[tokio::test]

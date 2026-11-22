@@ -17,7 +17,8 @@ else; it has only been tested on that one PC.
 | All devices in one list | Devices, zones and fans together; hide what you don't use; split fan headers into single fans; groups |
 | 3D preview | A live 3D model of the case and desk in the current colors; drag parts to where they really are |
 | 36 effects | Calm, motion, colorful, alerts and sound-reactive effects, each with color, brightness and speed |
-| Music sync | Follows what Windows is playing: spectrum, bass, treble, beat, tempo and the mood of the song |
+| Music sync | Follows what Windows is playing: spectrum, bass, treble, beat, tempo and the mood of the song; kicks, claps and hi-hats hit even in loud electronic music; a live spectrum shows what it hears |
+| Sound colors | Sound effects in their own colors, or rainbow, random on every beat, cold to hot, fire or neon |
 | Triggers | A key press, a mouse click, the beat or an app starting can light whole devices, some zones or single keys and LEDs, with priorities |
 | Presets | Save and load your lighting setups |
 | Power | Lights off on sleep, lock or when idle; start with Windows; lives in the tray |

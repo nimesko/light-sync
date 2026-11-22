@@ -2,60 +2,71 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using Windows.UI;
 
 namespace LightSync.App;
 
 /// <summary>
-/// The sound analyzer under the effects, shown while a sound effect is selected: 24 bars with peak marks,
-/// level / bass / mid / treble meters and a beat light. It polls "audio_spectrum" about 30 times a second,
-/// only while it can be seen. Every shape is made once; a frame only changes transforms and opacity.
+/// A live view of what the service hears from the Windows sound output: 24 bars with peak marks (bass
+/// on the left), the level / bass / mid / treble the lights follow, and a beat light with the tempo.
+/// The bars are painted like the lights: the effect's colors, or the sound palette picked for it.
+/// Every shape is made once; a frame only changes transforms, opacity and brush colors.
 /// </summary>
-public sealed partial class MainWindow
+public sealed class SoundVisualizer
 {
-    private const int AnalyzerBands = 24;
-    private const double AnalyzerHeight = 110;
+    public const int Bands = 24;
 
-    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _analyzerTimer;
-    private readonly ScaleTransform[] _barScales = new ScaleTransform[AnalyzerBands];
-    private readonly Rectangle[] _bars = new Rectangle[AnalyzerBands];
-    private readonly Rectangle[] _peaks = new Rectangle[AnalyzerBands];
-    private readonly TranslateTransform[] _peakMoves = new TranslateTransform[AnalyzerBands];
+    private readonly double _height;
+    private readonly ScaleTransform[] _barScales = new ScaleTransform[Bands];
+    private readonly Rectangle[] _bars = new Rectangle[Bands];
+    private readonly SolidColorBrush[] _barBrushes = new SolidColorBrush[Bands];
+    private readonly Rectangle[] _peaks = new Rectangle[Bands];
+    private readonly TranslateTransform[] _peakMoves = new TranslateTransform[Bands];
     private readonly ScaleTransform[] _meterScales = new ScaleTransform[4];
-    private Ellipse? _beatDot;
-    private TextBlock? _analyzerStatus;
+    private readonly Ellipse _beatDot;
+    private readonly TextBlock _tempo;
+    private readonly TextBlock _status;
     private double _beatGlow;
-    private bool _analyzerBusy;
-    /// <summary>0: audio_spectrum; 1: older service, only audio_status (level); 2: neither.</summary>
-    private int _analyzerMode;
-    private int _analyzerFrame;
+    private bool _wasBeat;
+    private int _beats;
+    private string _effect = "static";
+    private string _palette = "effect";
+    private Color _color = Color.FromArgb(255, 255, 255, 255);
 
-    private void BuildAnalyzer()
+    /// <summary>The whole view, to put on a page.</summary>
+    public Border Root { get; }
+
+    /// <summary>Whether the window polls the service for this view (it also has to be on screen).</summary>
+    public bool Polling { get; set; }
+
+    /// <summary><paramref name="height"/>: of the bars; <paramref name="meters"/>: show the level / bass / mid / treble meters beside them.</summary>
+    public SoundVisualizer(double height, bool meters = true)
     {
-        var canvas = new Canvas { Height = AnalyzerHeight, HorizontalAlignment = HorizontalAlignment.Stretch };
+        _height = height;
+        var canvas = new Canvas { Height = height, HorizontalAlignment = HorizontalAlignment.Stretch };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(canvas, "Sound spectrum, 24 bands from bass to treble");
         var peakBrush = Res("TextFillColorPrimaryBrush");
-        for (var i = 0; i < AnalyzerBands; i++)
+        for (var i = 0; i < Bands; i++)
         {
-            // Bass on the left in red, through yellow and green, to treble in blue and violet.
-            var brush = new SolidColorBrush(FromHue(0.78 * i / (AnalyzerBands - 1)));
+            _barBrushes[i] = new SolidColorBrush(Hue(0.78 * i / (Bands - 1)));
             _barScales[i] = new ScaleTransform { ScaleY = 0.01 };
             _bars[i] = new Rectangle
             {
-                Height = AnalyzerHeight,
-                Fill = brush,
+                Height = height,
+                Fill = _barBrushes[i],
                 RadiusX = 2,
                 RadiusY = 2,
                 RenderTransformOrigin = new Windows.Foundation.Point(0.5, 1),
                 RenderTransform = _barScales[i],
             };
-            _peakMoves[i] = new TranslateTransform { Y = AnalyzerHeight - 2 };
+            _peakMoves[i] = new TranslateTransform { Y = height - 2 };
             _peaks[i] = new Rectangle { Height = 2, Fill = peakBrush, Opacity = 0.8, RenderTransform = _peakMoves[i] };
             canvas.Children.Add(_bars[i]);
             canvas.Children.Add(_peaks[i]);
         }
         canvas.SizeChanged += (_, e) => LayoutBars(e.NewSize.Width);
 
-        var meters = new StackPanel { Spacing = 8, Width = 170, VerticalAlignment = VerticalAlignment.Center };
+        var side = new StackPanel { Spacing = 8, Width = 170, VerticalAlignment = VerticalAlignment.Center };
         var names = new[] { "Level", "Bass", "Mid", "Treble" };
         for (var i = 0; i < names.Length; i++)
         {
@@ -79,21 +90,32 @@ public sealed partial class MainWindow
             var row = new Grid { ColumnSpacing = 8 };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.Children.Add(new TextBlock { Text = names[i], Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(new TextBlock { Text = names[i], Style = Style("CaptionTextBlockStyle"), VerticalAlignment = VerticalAlignment.Center });
             Grid.SetColumn(track, 1);
             row.Children.Add(track);
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(track, $"{names[i]} meter");
-            meters.Children.Add(row);
+            ToolTipService.SetToolTip(track, $"{names[i]}: the level with its hits (what the lights follow)");
+            side.Children.Add(row);
         }
         _beatDot = new Ellipse { Width = 14, Height = 14, Fill = Res("AccentFillColorDefaultBrush"), Opacity = 0.15, VerticalAlignment = VerticalAlignment.Center };
+        _tempo = new TextBlock { Text = "Beat", Style = Style("CaptionTextBlockStyle"), VerticalAlignment = VerticalAlignment.Center };
         var beat = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
         beat.Children.Add(_beatDot);
-        beat.Children.Add(new TextBlock { Text = "Beat", Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], VerticalAlignment = VerticalAlignment.Center });
-        meters.Children.Add(beat);
-
-        _analyzerStatus = new TextBlock
+        beat.Children.Add(_tempo);
+        side.Children.Add(beat);
+        if (!meters)
         {
-            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            // Compact: only the beat light and tempo beside the bars.
+            for (var i = 0; i < names.Length; i++)
+            {
+                side.Children[i].Visibility = Visibility.Collapsed;
+            }
+            side.Width = 110;
+        }
+
+        _status = new TextBlock
+        {
+            Style = Style("CaptionTextBlockStyle"),
             Foreground = Res("TextFillColorSecondaryBrush"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0),
@@ -106,15 +128,85 @@ public sealed partial class MainWindow
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.Children.Add(canvas);
-        Grid.SetColumn(meters, 1);
-        grid.Children.Add(meters);
-        Grid.SetRow(_analyzerStatus, 1);
-        Grid.SetColumnSpan(_analyzerStatus, 2);
-        grid.Children.Add(_analyzerStatus);
-        AnalyzerHost.Child = grid;
+        Grid.SetColumn(side, 1);
+        grid.Children.Add(side);
+        Grid.SetRow(_status, 1);
+        Grid.SetColumnSpan(_status, 2);
+        grid.Children.Add(_status);
+        Root = new Border
+        {
+            Padding = new Thickness(12),
+            CornerRadius = new CornerRadius(6),
+            Background = Res("SubtleFillColorSecondaryBrush"),
+            Child = grid,
+        };
     }
 
-    /// <summary>Spread the bars over the canvas width (only when its size changes).</summary>
+    /// <summary>Whether the view can be seen on the page (shown, and part of the window).</summary>
+    public bool IsShown => Polling && Root.IsLoaded && Root.Visibility == Visibility.Visible;
+
+    /// <summary>Paint the bars for this effect, color and sound palette (as the lights get them).</summary>
+    public void Recolor(string effect, Color color, string palette)
+    {
+        (_effect, _color, _palette) = (effect, color, palette);
+        if (palette == "effect")
+        {
+            for (var i = 0; i < Bands; i++)
+            {
+                _barBrushes[i].Color = EffectColor(effect, color, (double)i / (Bands - 1));
+            }
+        }
+    }
+
+    public void SetStatus(string text)
+    {
+        if (_status.Text != text)
+        {
+            _status.Text = text;
+        }
+    }
+
+    public void Draw(AudioSpectrum s)
+    {
+        if (s.Beat && !_wasBeat)
+        {
+            _beats++; // a new beat: random and neon palettes change
+        }
+        _wasBeat = s.Beat;
+        for (var i = 0; i < Bands; i++)
+        {
+            var v = i < s.Bands.Length ? s.Bands[i] : 0;
+            var peak = i < s.Peaks.Length ? Math.Max(s.Peaks[i], v) : v;
+            _barScales[i].ScaleY = Math.Max(0.01, v);
+            _peakMoves[i].Y = (1 - peak) * (_height - 2);
+            if (_palette != "effect")
+            {
+                var c = PaletteColor(_palette, v, (double)i / (Bands - 1), _beats);
+                if (_barBrushes[i].Color != c)
+                {
+                    _barBrushes[i].Color = c;
+                }
+            }
+        }
+        double[] levels = [s.Level, s.Bass, s.Mid, s.Treble];
+        for (var i = 0; i < levels.Length; i++)
+        {
+            // What the sound effects follow: the level mixed with its hits (PUNCH_MIX in effects.rs).
+            var drive = i < s.Punch.Length ? 0.35 * levels[i] + 0.65 * s.Punch[i] : levels[i];
+            _meterScales[i].ScaleX = Math.Clamp(drive, 0, 1);
+        }
+        _beatGlow = s.Beat ? Math.Max(_beatGlow * 0.8, s.BeatStrength > 0 ? s.BeatStrength : 1) : _beatGlow * 0.8;
+        _beatDot.Opacity = 0.15 + 0.85 * _beatGlow;
+        var tempo = s.TempoBpm >= 40 ? $"{s.TempoBpm:0} BPM" : "Beat";
+        if (_tempo.Text != tempo)
+        {
+            _tempo.Text = tempo;
+        }
+    }
+
+    /// <summary>Back to rest (nothing heard).</summary>
+    public void Clear() => Draw(new AudioSpectrum());
+
     private void LayoutBars(double width)
     {
         if (width <= 0)
@@ -122,8 +214,8 @@ public sealed partial class MainWindow
             return;
         }
         const double gap = 3;
-        var barWidth = Math.Max(1, (width - gap * (AnalyzerBands - 1)) / AnalyzerBands);
-        for (var i = 0; i < AnalyzerBands; i++)
+        var barWidth = Math.Max(1, (width - gap * (Bands - 1)) / Bands);
+        for (var i = 0; i < Bands; i++)
         {
             var left = i * (barWidth + gap);
             _bars[i].Width = barWidth;
@@ -134,55 +226,171 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// Paint the bars in the colors the lights get for the selected sound effect, so the analyzer and the
-    /// LEDs match: the spectrum effects use the service's band hues (red bass to violet treble, see
-    /// band_hue in effects.rs), the level meter green / yellow / red, the others the chosen color.
+    /// A band's color with the effect's own colors: the spectrum effects use the service's band hues (red
+    /// bass to violet treble, band_hue in effects.rs), the level meter green / yellow / red, bass &amp;
+    /// treble warm and cool, the others the chosen color.
     /// </summary>
-    private void RecolorAnalyzer()
+    private static Color EffectColor(string effect, Color color, double x) => effect switch
     {
-        for (var i = 0; i < AnalyzerBands; i++)
+        "spectrum_analyzer" or "spectrum_bars" or "music_flow" => Hue(0.78 * x),
+        "bass_treble" => x < 0.5 ? Color.FromArgb(255, 255, 40, 70) : Color.FromArgb(255, 150, 215, 255),
+        "vu_meter" => Hue(x < 0.55 ? 1.0 / 3 : x < 0.8 ? 1.0 / 3 - (x - 0.55) / 0.25 / 6 : Math.Max(0, 1.0 / 6 - (x - 0.8) / 0.12 / 6)),
+        _ => color,
+    };
+
+    /// <summary>
+    /// A band's color with a sound palette (recolor in effects.rs): the rainbow along the bands, by how
+    /// loud it is (cold to hot, fire), a new color per beat (random), or pink and cyan halves swapping on
+    /// the beat (neon).
+    /// </summary>
+    public static Color PaletteColor(string palette, double heat, double x, int beat)
+    {
+        heat = Math.Clamp(heat, 0, 1);
+        return palette switch
         {
-            var x = (double)i / (AnalyzerBands - 1);
-            var c = _effect switch
-            {
-                "spectrum_analyzer" or "spectrum_bars" or "music_flow" => FromHue(0.78 * x),
-                // Bass warm, treble cool, like the effect.
-                "bass_treble" => x < 0.5 ? Windows.UI.Color.FromArgb(255, 255, 40, 70) : Windows.UI.Color.FromArgb(255, 150, 215, 255),
-                "vu_meter" => FromHue(x < 0.55 ? 1.0 / 3 : x < 0.8 ? 1.0 / 3 - (x - 0.55) / 0.25 / 6 : Math.Max(0, 1.0 / 6 - (x - 0.8) / 0.12 / 6)),
-                _ => _color,
-            };
-            if (_bars[i] is { } bar && (bar.Fill as SolidColorBrush)?.Color != c)
-            {
-                bar.Fill = new SolidColorBrush(c);
-            }
-        }
+            "rainbow" => Hue(x + 0.05 * beat),
+            "random" => Hue(beat * 0.618034 + 0.03 * (x - 0.5)),
+            "cold_hot" => Hue(0.66 * (1 - heat)),
+            "fire" => Hsv(0.14 * heat, 1 - 0.55 * heat * heat, 1),
+            "neon" => Hue(((x < 0.5 ? 0 : 1) + beat) % 2 == 0 ? 0.92 : 0.5),
+            _ => Hue(0.78 * x),
+        };
     }
 
-    /// <summary>Show the analyzer (and poll) while a sound effect is selected; hide it (and stop) otherwise.</summary>
-    private void ShowAnalyzer(bool on)
+    public static Color Hue(double h) => Hsv(h, 1, 1);
+
+    public static Color Hsv(double h, double s, double v)
     {
+        h = (h % 1 + 1) % 1 * 6;
+        var i = (int)h;
+        var f = h - i;
+        double p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+        var (r, g, b) = i switch { 0 => (v, t, p), 1 => (q, v, p), 2 => (p, v, t), 3 => (p, q, v), 4 => (t, p, v), _ => (v, p, q) };
+        static byte B(double x) => (byte)Math.Round(Math.Clamp(x, 0, 1) * 255);
+        return Color.FromArgb(255, B(r), B(g), B(b));
+    }
+
+    private static Brush Res(string key) => (Brush)Application.Current.Resources[key];
+
+    private static Style Style(string key) => (Style)Application.Current.Resources[key];
+}
+
+/// <summary>
+/// The window's side of the sound views: one poll of "audio_spectrum" about 30 times a second feeds every
+/// visualizer on screen (the device's, Home's, a trigger's); nothing runs while none can be seen.
+/// </summary>
+public sealed partial class MainWindow
+{
+    /// <summary>Sound palettes for the sound effects: id, name, what it does (effects.rs Palette).</summary>
+    internal static readonly (string Id, string Name, string Tip)[] SoundPalettes =
+    [
+        ("effect", "Effect colors", "The effect's own colors: the color you pick, or its built-in ones"),
+        ("rainbow", "Rainbow", "Every color of the rainbow along each device, drifting with the music"),
+        ("random", "Random", "A new random color on every beat"),
+        ("cold_hot", "Cold to hot", "By how loud it is: blue when quiet, through green and yellow, to red at the loudest"),
+        ("fire", "Fire", "By how loud it is: deep red when quiet to yellow and white-hot at the loudest"),
+        ("neon", "Neon", "Neon pink and cyan along each device, swapping on every beat"),
+    ];
+
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _analyzerTimer;
+    private readonly List<SoundVisualizer> _visualizers = [];
+    /// <summary>The device view's visualizer (under the sound effects).</summary>
+    private SoundVisualizer? _deviceSound;
+    /// <summary>Home's visualizer: its card shows while the service is listening.</summary>
+    private SoundVisualizer? _homeSound;
+    private Border? _homeSoundCard;
+    private bool _analyzerBusy;
+    /// <summary>0: audio_spectrum; 1: older service, only audio_status (level); 2: neither.</summary>
+    private int _analyzerMode;
+    private int _analyzerFrame;
+    private bool _lastHeardActive;
+
+    /// <summary>Make the device view's and Home's visualizers (once; Home can be built before the rest of the window).</summary>
+    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_deviceSound), nameof(_homeSound))]
+    private void BuildAnalyzer()
+    {
+        if (_deviceSound is not null && _homeSound is not null)
+        {
+            return;
+        }
+        _deviceSound = new SoundVisualizer(110);
+        _homeSound = new SoundVisualizer(70, meters: false);
+        _visualizers.Add(_deviceSound);
+        _visualizers.Add(_homeSound);
+        AnalyzerHost.Child = _deviceSound.Root;
+        AnalyzerHost.Padding = new Thickness(0);
+    }
+
+    /// <summary>A visualizer for a page that comes and goes (the trigger editor): polled while it is loaded and shown.</summary>
+    private SoundVisualizer AddVisualizer(double height)
+    {
+        var v = new SoundVisualizer(height) { Polling = true };
+        v.Root.Unloaded += (_, _) => _visualizers.Remove(v);
+        _visualizers.Add(v);
+        UpdateSoundViews();
+        return v;
+    }
+
+    /// <summary>Paint the device view's bars in the colors the lights get for the selected sound effect.</summary>
+    private void RecolorAnalyzer() => _deviceSound?.Recolor(_effect, _color, _palette);
+
+    /// <summary>Which views poll: the device view while a sound effect is selected, Home while it is shown.</summary>
+    private void UpdateSoundViews()
+    {
+        // Not ready yet while the window is being made (the timer comes later).
+        if (_deviceSound is null || _homeSound is null || _analyzerTimer is null)
+        {
+            return;
+        }
+        var deviceAudio = EffectById(_effect).Audio;
+        AnalyzerHost.Visibility = deviceAudio ? Visibility.Visible : Visibility.Collapsed;
+        _deviceSound.Polling = _view == ShellView.Device && deviceAudio;
+        _homeSound.Polling = _view == ShellView.Home;
         RecolorAnalyzer();
-        AnalyzerHost.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        if (on && !_exiting)
+        if (!_exiting && _visualizers.Any(v => v.Polling))
         {
             _analyzerTimer.Start();
         }
         else
         {
             _analyzerTimer.Stop();
-            DrawSpectrum(new AudioSpectrum());
+            foreach (var v in _visualizers)
+            {
+                v.Clear();
+            }
         }
     }
 
-    /// <summary>One analyzer frame. Skipped while the window is hidden or minimized, or the last request still runs.</summary>
+    /// <summary>Home's card with the live spectrum (shown only while the service listens: a sound effect or trigger is on).</summary>
+    private Border HomeSoundCard()
+    {
+        BuildAnalyzer();
+        if (_homeSoundCard is null)
+        {
+            var panel = new StackPanel { Spacing = 8 };
+            panel.Children.Add(CardHeader("Sound", Text("What the sound effects hear", "CaptionTextBlockStyle", secondary: true)));
+            panel.Children.Add(_homeSound.Root);
+            _homeSoundCard = Card(panel);
+        }
+        _homeSoundCard.Visibility = _lastHeardActive ? Visibility.Visible : Visibility.Collapsed;
+        return _homeSoundCard;
+    }
+
+    /// <summary>One frame for every visualizer on screen. Skipped while the window is hidden or minimized, or the last request still runs.</summary>
     private async Task RefreshAnalyzerAsync()
     {
-        if (_analyzerBusy || !_ready || _exiting || _analyzerMode == 2 || AnalyzerHost.Visibility != Visibility.Visible || !IsOnScreen)
+        if (_analyzerBusy || !_ready || _exiting || _analyzerMode == 2 || !IsOnScreen)
         {
             return;
         }
-        // The older fallback only has a level: 10 times a second is plenty.
-        if (_analyzerMode == 1 && ++_analyzerFrame % 3 != 0)
+        var shown = _visualizers.Where(v => v.Polling && v.Root.IsLoaded).ToList();
+        if (shown.Count == 0)
+        {
+            return;
+        }
+        // Only Home is open and nothing is being heard: check now and then whether that changes.
+        var onlyHome = shown.All(v => v == _homeSound);
+        if ((onlyHome && !_lastHeardActive || _analyzerMode == 1) && ++_analyzerFrame % 10 != 0)
         {
             return;
         }
@@ -197,32 +405,50 @@ public sealed partial class MainWindow
             catch (LightSyncException e) when (e.IsUnknownMethod)
             {
                 _analyzerMode++;
-                SetAnalyzerStatus(_analyzerMode == 1
+                var note = _analyzerMode == 1
                     ? "This LightSync service only reports the overall level. Update lightsyncd for the full analyzer."
-                    : "This LightSync service can't show what it hears. Update lightsyncd for the analyzer.");
-                DrawSpectrum(new AudioSpectrum());
+                    : "This LightSync service can't show what it hears. Update lightsyncd for the analyzer.";
+                foreach (var v in shown)
+                {
+                    v.SetStatus(note);
+                    v.Clear();
+                }
                 return;
             }
-            if (_exiting || AnalyzerHost.Visibility != Visibility.Visible)
+            if (_exiting)
             {
                 return;
             }
-            DrawSpectrum(s);
-            if (_analyzerMode != 0)
+            if (s.Active != _lastHeardActive)
             {
-                return; // the older service's note stays
+                _lastHeardActive = s.Active;
+                if (_homeSoundCard is not null)
+                {
+                    _homeSoundCard.Visibility = s.Active ? Visibility.Visible : Visibility.Collapsed;
+                }
             }
             // Sound is captured from the Windows default output device (WASAPI loopback), whatever plays there.
             var source = s.Device is { Length: > 0 } dev ? $"\"{dev}\" (Windows sound output)" : "the Windows sound output";
-            SetAnalyzerStatus(!s.Active
-                ? "Not listening yet: the sound effect starts listening within a moment of being shown."
+            var status = !s.Active
+                ? "Not listening right now: LightSync listens while a sound effect or an enabled sound trigger is on."
                 : s.Device is null && s.Level < 0.005 ? "Connecting to the Windows sound output..."
                 : s.Level < 0.005 ? $"Listening to {source}. Nothing is playing right now."
-                : $"Listening to {source}: the lights follow this spectrum.{Flow(s)}");
+                : $"Listening to {source}: the lights follow this spectrum.{Flow(s)}";
+            foreach (var v in shown)
+            {
+                v.Draw(s);
+                if (_analyzerMode == 0)
+                {
+                    v.SetStatus(status);
+                }
+            }
         }
         catch (Exception)
         {
-            SetAnalyzerStatus("Not connected to the LightSync service.");
+            foreach (var v in shown)
+            {
+                v.SetStatus("Not connected to the LightSync service.");
+            }
         }
         finally
         {
@@ -230,49 +456,11 @@ public sealed partial class MainWindow
         }
     }
 
-    /// <summary>" About 124 BPM, bright and energetic." once a tempo is heard (what Music flow follows).</summary>
+    /// <summary>" Bright and energetic." (the tempo shows beside the beat light).</summary>
     private static string Flow(AudioSpectrum s)
     {
         var tone = s.Mood < 0.35 ? "deep, bass-heavy" : s.Mood > 0.65 ? "bright" : "balanced";
         var pace = s.Energy < 0.3 ? "calm" : s.Energy > 0.65 ? "energetic" : "steady";
-        return s.TempoBpm >= 40 ? $" About {s.TempoBpm:0} BPM, {tone} and {pace}." : $" Sound: {tone}, {pace}.";
-    }
-
-    private void SetAnalyzerStatus(string text)
-    {
-        if (_analyzerStatus is { } t && t.Text != text)
-        {
-            t.Text = text;
-        }
-    }
-
-    private void DrawSpectrum(AudioSpectrum s)
-    {
-        for (var i = 0; i < AnalyzerBands; i++)
-        {
-            var v = i < s.Bands.Length ? s.Bands[i] : 0;
-            var peak = i < s.Peaks.Length ? Math.Max(s.Peaks[i], v) : v;
-            if (_barScales[i] is { } scale)
-            {
-                scale.ScaleY = Math.Max(0.01, v);
-            }
-            if (_peakMoves[i] is { } move)
-            {
-                move.Y = (1 - peak) * (AnalyzerHeight - 2);
-            }
-        }
-        double[] meters = [s.Level, s.Bass, s.Mid, s.Treble];
-        for (var i = 0; i < meters.Length; i++)
-        {
-            if (_meterScales[i] is { } scale)
-            {
-                scale.ScaleX = meters[i];
-            }
-        }
-        _beatGlow = s.Beat ? 1 : _beatGlow * 0.8;
-        if (_beatDot is { } dot)
-        {
-            dot.Opacity = 0.15 + 0.85 * _beatGlow;
-        }
+        return $" Sound: {tone}, {pace}.";
     }
 }

@@ -85,6 +85,8 @@ public sealed partial class MainWindow : Window
     private TaskbarIcon? _trayIcon;
     private Func<Task>? _noticeAction;
     private string _effect = "static";
+    /// <summary>The sound palette of the selected target (sound effects only): "effect", "random", "cold_hot", "fire" or "neon".</summary>
+    private string _palette = "effect";
     private Color _color = Color.FromArgb(255, 255, 255, 255);
     private int _deviceCount;
     private bool _exiting;
@@ -222,6 +224,7 @@ public sealed partial class MainWindow : Window
 
         BuildEffectTiles();
         BuildAnalyzer();
+        BuildPaletteTiles();
         BuildPresets();
         ShowColor();
         ShowEffect();
@@ -528,7 +531,7 @@ public sealed partial class MainWindow : Window
         {
             foreach (var id in TargetIds)
             {
-                await _client.SetStateAsync(id, _effect, Hex, (int)BrightnessSlider.Value, (int)SpeedSlider.Value);
+                await _client.SetStateAsync(id, _effect, Hex, (int)BrightnessSlider.Value, (int)SpeedSlider.Value, _palette);
             }
             // A change by hand: the lighting is no longer exactly the preset.
             if (_currentPreset is not null)
@@ -556,9 +559,75 @@ public sealed partial class MainWindow : Window
             _effect = "static";
             ShowEffect();
         }
+        else if (_palette != "effect")
+        {
+            _palette = "effect"; // picking a color means: use it, not the sound palette
+            ShowEffect();
+        }
         ShowColor();
         QueuePush();
     }
+
+    // ---------- sound palettes ----------
+
+    private readonly Dictionary<string, Button> _paletteButtons = [];
+
+    /// <summary>The sound palette tiles under the colors (shown for sound effects).</summary>
+    private void BuildPaletteTiles()
+    {
+        foreach (var (id, name, tip) in SoundPalettes)
+        {
+            var swatch = new Border { Height = 18, CornerRadius = new CornerRadius(9), Background = PaletteBrush(id), BorderBrush = Res("CardStrokeColorDefaultBrush"), BorderThickness = new Thickness(1) };
+            var button = new Button
+            {
+                Width = 110,
+                Height = 58,
+                Padding = new Thickness(8, 6, 8, 6),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Content = new StackPanel
+                {
+                    Spacing = 6,
+                    Children = { swatch, new TextBlock { Text = name, Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], HorizontalAlignment = HorizontalAlignment.Center } },
+                },
+            };
+            ToolTipService.SetToolTip(button, tip);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, $"Sound colors: {name}");
+            var pick = id;
+            button.Click += (_, _) =>
+            {
+                _palette = pick;
+                ShowEffect();
+                QueuePush();
+            };
+            _paletteButtons[id] = button;
+            PaletteTiles.Children.Add(button);
+        }
+    }
+
+    private void ShowPalette()
+    {
+        foreach (var (id, button) in _paletteButtons)
+        {
+            var selected = id == _palette;
+            button.BorderBrush = selected ? Res("AccentFillColorDefaultBrush") : Res("CardStrokeColorDefaultBrush");
+            button.BorderThickness = new Thickness(selected ? 2 : 1);
+        }
+        if (_paletteButtons.TryGetValue("effect", out var own) && own.Content is StackPanel { Children: [Border swatch, ..] })
+        {
+            swatch.Background = EffectBrush(_effect, _color); // the effect's own colors
+        }
+    }
+
+    /// <summary>A small picture of a sound palette.</summary>
+    private static Brush PaletteBrush(string id) => id switch
+    {
+        "rainbow" => HueBrush(1),
+        "random" => Gradient([.. Enumerable.Range(0, 6).Select(k => SoundVisualizer.Hue(k * 0.618034))]),
+        "cold_hot" => Gradient([.. Enumerable.Range(0, 5).Select(k => SoundVisualizer.PaletteColor("cold_hot", k / 4.0, 0, 0))]),
+        "fire" => Gradient([Color.FromArgb(255, 90, 0, 0), .. Enumerable.Range(0, 4).Select(k => SoundVisualizer.PaletteColor("fire", k / 3.0, 0, 0))]),
+        "neon" => Gradient([SoundVisualizer.Hue(0.92), SoundVisualizer.Hue(0.92), SoundVisualizer.Hue(0.5), SoundVisualizer.Hue(0.5)]),
+        _ => new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)),
+    };
 
     private void SyncPicker()
     {
@@ -799,6 +868,7 @@ public sealed partial class MainWindow : Window
             _color = ParseHex(s.Color) ?? _color;
             BrightnessSlider.Value = s.Brightness;
             SpeedSlider.Value = s.Speed;
+            _palette = SoundPalettes.Any(p => p.Id == s.Palette) ? s.Palette : "effect";
             SyncPicker();
             ShowColor();
             ShowEffect();
@@ -2095,13 +2165,17 @@ public sealed partial class MainWindow : Window
             button.BorderThickness = new Thickness(selected ? 2 : 1);
         }
         var effect = EffectById(_effect);
-        ColorHint.Visibility = effect.UsesColor ? Visibility.Collapsed : Visibility.Visible;
-        Presets.Opacity = effect.UsesColor ? 1 : 0.5;
+        var palette = effect.Audio && _palette != "effect";
+        ColorHint.Text = palette ? "The sound colors set the colors now. Pick a color to use it instead." : "This effect uses its own colors.";
+        ColorHint.Visibility = effect.UsesColor && !palette ? Visibility.Collapsed : Visibility.Visible;
+        Presets.Opacity = effect.UsesColor && !palette ? 1 : 0.5;
+        PalettePanel.Visibility = effect.Audio ? Visibility.Visible : Visibility.Collapsed;
+        ShowPalette();
         SpeedPanel.Visibility = _effect == "static" ? Visibility.Collapsed : Visibility.Visible;
         // For sound effects the slider sets how strongly they react.
         SpeedLabel.Text = effect.Audio ? "Sensitivity" : "Speed";
         ToolTipService.SetToolTip(SpeedSlider, effect.Audio ? "How strongly the lights react to quiet sound" : null);
-        ShowAnalyzer(effect.Audio);
+        UpdateSoundViews();
     }
 
     private static Color[] Stops(params Color[] c) => c;

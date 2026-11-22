@@ -373,6 +373,13 @@
                                 </StackPanel>
                             </Grid>
                             <VariableSizedWrapGrid x:Name="Presets" Orientation="Horizontal" ItemWidth="48" ItemHeight="48" />
+                            <!-- Sound effects: their colors can follow a palette instead (filled in code) -->
+                            <StackPanel x:Name="PalettePanel" Visibility="Collapsed" Margin="0,14,0,0" Spacing="6">
+                                <TextBlock Text="Sound colors" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock Text="Color the sound effect by the music instead of one color." TextWrapping="Wrap"
+                                           Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <VariableSizedWrapGrid x:Name="PaletteTiles" Orientation="Horizontal" ItemWidth="116" ItemHeight="64" />
+                            </StackPanel>
                             <TextBlock x:Name="ColorHint" Text="This effect uses its own colors." Margin="0,8,0,0" Visibility="Collapsed"
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>

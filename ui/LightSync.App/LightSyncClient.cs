@@ -44,10 +44,11 @@ public sealed record DeviceInfo(string Id, string Name, string Kind, string Prov
 public sealed record LightStatus(string Effect, string Color, int Brightness, int Speed, bool Connected, string? Error, bool? On);
 
 /// <summary>What one target (device, zone, fan, group or "all") currently shows.</summary>
-public sealed record TargetState(string Effect, string Color, int Brightness, int Speed, string Target, bool Own);
+/// <remarks><see cref="Palette"/>: the colors of a sound effect ("effect", "random", "cold_hot", "fire", "neon").</remarks>
+public sealed record TargetState(string Effect, string Color, int Brightness, int Speed, string Target, bool Own, string Palette = "effect");
 
 /// <summary>What a row of the device list shows: its lighting, whether it is set on that row itself, and for groups whether members differ.</summary>
-public sealed record RowState(string Effect, string Color, int Brightness, int Speed, bool Own, bool Mixed, bool On);
+public sealed record RowState(string Effect, string Color, int Brightness, int Speed, bool Own, bool Mixed, bool On, string Palette = "effect");
 
 public sealed record GroupInfo(string Id, string Name, List<string> Members);
 
@@ -77,6 +78,10 @@ public sealed class AudioSpectrum
     public double TempoBpm { get; init; }
     /// <summary>The music's character over the last seconds: 0 dark / bass-heavy .. 1 bright / airy.</summary>
     public double Mood { get; init; } = 0.5;
+    /// <summary>Hits of level, bass, mid and treble (0..1, 0.5 while steady): what the sound effects follow.</summary>
+    public double[] Punch { get; init; } = [];
+    /// <summary>How strong the current beat is (0 between beats).</summary>
+    public double BeatStrength { get; init; }
     /// <summary>How energetic the music is over the last seconds, 0..1.</summary>
     public double Energy { get; init; }
 }
@@ -213,8 +218,8 @@ public sealed class LightSyncClient
     /// Set the lighting of one target: "all", a device / zone / fan id, or "group:" plus the group id.
     /// The service renders it continuously.
     /// </summary>
-    public Task SetStateAsync(string target, string effect, string hex, int brightness, int speed) =>
-        CallAsync("set_state", new { target, effect, color = hex, brightness, speed });
+    public Task SetStateAsync(string target, string effect, string hex, int brightness, int speed, string palette) =>
+        CallAsync("set_state", new { target, effect, color = hex, brightness, speed, palette });
 
     public async Task<List<GroupInfo>> GroupsAsync() =>
         (await CallAsync("groups"))?.Deserialize<List<GroupInfo>>(Json) ?? [];
@@ -283,6 +288,8 @@ public sealed class LightSyncClient
             TempoBpm = r["tempo_bpm"] is JsonValue tb && tb.TryGetValue<double>(out var bpm) && double.IsFinite(bpm) ? Math.Clamp(bpm, 0, 400) : 0,
             Mood = r["mood"] is null ? 0.5 : Num(r["mood"]),
             Energy = Num(r["energy"]),
+            Punch = r["punch"] is JsonObject pu ? [Num(pu["level"]), Num(pu["bass"]), Num(pu["mid"]), Num(pu["treble"])] : [],
+            BeatStrength = Num(r["beat_strength"]),
         };
     }
 

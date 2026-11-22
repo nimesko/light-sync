@@ -69,6 +69,7 @@ public sealed partial class MainWindow
             BuildHome();
         }
         HighlightPreview();
+        UpdateSoundViews();
         UpdatePreviewActivity();
     }
 
@@ -220,6 +221,8 @@ public sealed partial class MainWindow
             + (_profiles.Count > 0 ? $" · {_profiles.Count} saved preset{(_profiles.Count == 1 ? "" : "s")} in File > Presets" : ""),
             "CaptionTextBlockStyle", secondary: true));
         HomePane.Children.Add(Card(lighting));
+        // Sound: the live spectrum, while a sound effect or trigger is listening.
+        HomePane.Children.Add(HomeSoundCard());
 
         // Triggers: how many, which are on; each opens its configuration.
         var triggers = new StackPanel { Spacing = 8 };

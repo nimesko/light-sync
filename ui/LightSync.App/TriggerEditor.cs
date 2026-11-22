@@ -380,8 +380,22 @@ public sealed partial class MainWindow
         effect.Header = "Effect";
         var lightBrightness = new Slider { Header = "Brightness", Minimum = 0, Maximum = 100, StepFrequency = 1, Value = t.Action["brightness"] is JsonValue lb && lb.TryGetValue<int>(out var lbi) ? lbi : 100 };
         var lightSpeed = new Slider { Header = "Speed", Minimum = 1, Maximum = 100, StepFrequency = 1, Value = t.Action["speed"] is JsonValue ls && ls.TryGetValue<int>(out var lsi) ? lsi : 50 };
-        var lightingPanel = new StackPanel { Spacing = 6, Children = { effect, lightBrightness, lightSpeed } };
+        // Sound effects: their colors can follow a palette (random per beat, cold to hot, ...).
+        var palette = new ComboBox
+        {
+            Header = "Sound colors",
+            ItemsSource = SoundPalettes.Select(p => p.Name).ToList(),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            SelectedIndex = Math.Max(0, Array.FindIndex(SoundPalettes, p => p.Id == t.Action["palette"]?.ToString())),
+        };
+        var paletteTip = Caption("");
+        string PaletteId() => SoundPalettes[Math.Max(0, palette.SelectedIndex)].Id;
+        // What LightSync hears now, painted like these lights will be.
+        var lightSound = AddVisualizer(70);
+        var lightingPanel = new StackPanel { Spacing = 6, Children = { effect, palette, paletteTip, lightBrightness, lightSpeed, lightSound.Root } };
         string EffectId() => effectCombo.Selected ?? "static";
+        // The music triggers show what they listen to.
+        var whenSound = AddVisualizer(70);
 
         var durationMs = t.Action["duration_ms"] is JsonValue dv && dv.TryGetValue<int>(out var dms) ? Math.Clamp(dms, 50, 10000) : 400;
         var duration = new Slider { Header = "Duration", Minimum = 50, Maximum = 5000, StepFrequency = 50, Value = durationMs };
@@ -460,7 +474,7 @@ public sealed partial class MainWindow
             layerDelayText.Visibility = layerDelay.Visibility;
             var dl = (int)layerDelay.Value;
             layerDelayText.Text = dl == 0 ? "0 ms: every ring lights at once." : $"Each ring lights {dl} ms after the one inside it.";
-            var lightingUsesColor = a == "lighting" && EffectById(EffectId()).UsesColor;
+            var lightingUsesColor = a == "lighting" && EffectById(EffectId()).UsesColor && !(EffectById(EffectId()).Audio && PaletteId() != "effect");
             colorPanel.Visibility = a is "flash" or "ripple" or "fade_in" || lightingUsesColor ? Visibility.Visible : Visibility.Collapsed;
             randomColor.Visibility = a is "flash" or "ripple" or "fade_in" ? Visibility.Visible : Visibility.Collapsed;
             durationPanel.Visibility = a == "preset" || a == "lighting" && s == "app_running" ? Visibility.Collapsed : Visibility.Visible;
@@ -469,6 +483,19 @@ public sealed partial class MainWindow
             duration.Visibility = endless ? Visibility.Collapsed : Visibility.Visible;
             durationText.Text = endless ? "Once it plays, it stays on until you turn this trigger off, change it or delete it." : FormatMs((int)duration.Value);
             lightingPanel.Visibility = a == "lighting" ? Visibility.Visible : Visibility.Collapsed;
+            var soundEffect = a == "lighting" && EffectById(EffectId()).Audio;
+            palette.Visibility = soundEffect ? Visibility.Visible : Visibility.Collapsed;
+            paletteTip.Visibility = palette.Visibility;
+            paletteTip.Text = SoundPalettes[Math.Max(0, palette.SelectedIndex)].Tip + ".";
+            lightSound.Root.Visibility = palette.Visibility;
+            lightSound.Polling = soundEffect;
+
+            lightSound.Recolor(EffectId(), color, PaletteId());
+            lightSpeed.Header = soundEffect ? "Sensitivity" : "Speed";
+            var musicSource = s is "audio_beat" or "audio_level";
+            whenSound.Root.Visibility = musicSource ? Visibility.Visible : Visibility.Collapsed;
+            whenSound.Polling = musicSource;
+            UpdateSoundViews();
             preset.Visibility = a == "preset" ? Visibility.Visible : Visibility.Collapsed;
             var canTest = keyish || mouseish;
             test.IsEnabled = canTest;
@@ -488,6 +515,7 @@ public sealed partial class MainWindow
         };
         action.SelectionChanged += (_, _) => ShowParts();
         effect.SelectionChanged += (_, _) => ShowParts();
+        palette.SelectionChanged += (_, _) => ShowParts();
         radiusOn.Toggled += (_, _) => ShowParts();
         radius.ValueChanged += (_, _) => ShowParts();
         layerDelay.ValueChanged += (_, _) => ShowParts();
@@ -524,7 +552,7 @@ public sealed partial class MainWindow
             Spacing = 12,
             Children =
             {
-                StepCard(1, "When", "What sets it off.", source, keysPanel, button, levelPanel, appPanel),
+                StepCard(1, "When", "What sets it off.", source, keysPanel, button, levelPanel, appPanel, whenSound.Root),
                 StepCard(2, "Devices", "Which lights it uses: whole devices, some zones, or single LEDs.", devicesPanel),
                 StepCard(3, "Lights", "What the lights do.", action, lightingPanel, radiusPanel, colorPanel, durationPanel, preset),
                 StepCard(4, "Name", "Optional: shown in the trigger list.", name),
@@ -643,6 +671,7 @@ public sealed partial class MainWindow
                 act["effect"] = EffectId();
                 act["brightness"] = (int)lightBrightness.Value;
                 act["speed"] = (int)lightSpeed.Value;
+                act["palette"] = PaletteId();
                 if (s != "app_running")
                 {
                     // After an event: for this long (fading out at the end), or with no end; around the

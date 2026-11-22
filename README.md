@@ -16,11 +16,11 @@ else; it has only been tested on that one PC.
 |---|---|
 | All devices in one list | Devices, zones and fans together; hide what you don't use; split fan headers into single fans; groups |
 | 3D preview | A live 3D model of the case and desk in the current colors; drag parts to where they really are |
-| 38 effects | Calm, motion, colorful, alerts and sound-reactive effects, each with color, brightness and speed |
-| Music sync | Beat, Bass and Spectrum effects with lights per device, zone or LED; follows what Windows is playing (spectrum, bass, treble, beat, tempo, mood), even at a low volume; kicks, claps and hi-hats hit even in loud electronic music |
+| 28 effects | Calm, motion, colorful and alert effects, and Beat, Bass and Spectrum for sound, each with color, brightness and speed |
+| Music sync | Lights per device, zone or LED; follows what Windows is playing (spectrum, bass, treble, beat, tempo, mood), even at a low volume; kicks, claps and hi-hats hit even in loud electronic music |
 | What's playing | A live spectrum of what it hears, and which app is playing it: the song, and for a browser the site (YouTube, YouTube Music, Spotify...) |
 | Sound colors | One color, random (a set number of colors or a random number on every beat), cold to hot, low to high, rainbow, fire or neon |
-| Triggers | A key press, a mouse click, the beat or an app starting can light whole devices, some zones or single keys and LEDs, with priorities |
+| Triggers | A key press, a mouse click, the beat, an app running or a web site open in a browser (like youtube.com) can light whole devices, some zones or single keys and LEDs, with priorities |
 | Presets | Save and load your lighting setups |
 | Power | Lights off on sleep, lock or when idle; start with Windows; lives in the tray |
 | OpenRGB management | Starts, stops and updates OpenRGB for you, listening on this PC only |
@@ -68,7 +68,9 @@ A WinUI 3 app (`ui/LightSync.App`, C#) talks over a local named pipe to a small 
 Everything stays on the PC. Sound and key presses are only processed in memory, never stored or
 sent. To show what is playing, the app reads which apps make sound, the media Windows knows about and,
 for a browser, the name of the tab that plays, only while a sound view is open and never stored or
-sent. The only online request is the check for new OpenRGB versions.
+sent. A trigger that watches a web site reads the host of the page each window of that browser shows
+(nothing else of the address), and only tells the service whether the watched site is open. The only
+online request is the check for new OpenRGB versions.
 
 ## License
 

@@ -83,6 +83,73 @@ public static class NowPlaying
         return new NowPlayingInfo(apps, title, artist, mediaApp, site, domain);
     }
 
+    /// <summary>Whether a program ("chrome.exe") is a web browser LightSync can read the current page of.</summary>
+    public static bool IsBrowser(string exe) =>
+        Browsers.Contains(Path.GetFileNameWithoutExtension(exe.Trim()), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The sites (hosts) of the pages a browser shows now: each window's current tab, from its address bar
+    /// (UI Automation). Used only for "app is running" triggers that watch a site; nothing is kept.
+    /// </summary>
+    public static HashSet<string> CurrentHosts(string exe)
+    {
+        var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exe.Trim())))
+        {
+            using (p)
+            {
+                try
+                {
+                    var windows = AutomationElement.RootElement.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, p.Id));
+                    foreach (AutomationElement window in windows)
+                    {
+                        // The address bar is the first text box in the window (the toolbar comes before the page).
+                        var edit = window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+                        if (edit?.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern) == true
+                            && SiteHost(((ValuePattern)pattern).Current.Value) is { Length: > 0 } host)
+                        {
+                            hosts.Add(host);
+                        }
+                    }
+                }
+                catch (Exception failure) when (Errors.Expected(failure))
+                {
+                    // The window closed, or the browser is busy: the next check reads it again.
+                }
+            }
+        }
+        return hosts;
+    }
+
+    /// <summary>
+    /// A site's host from an address or what the user typed: lowercase, without the scheme, "www.", port,
+    /// path or query ("https://www.YouTube.com/watch?v=1" -> "youtube.com"); "" if it isn't one. The same rules
+    /// as site_host in the service (triggers.rs).
+    /// </summary>
+    public static string SiteHost(string? text)
+    {
+        var s = (text ?? "").Trim().ToLowerInvariant();
+        if (s.IndexOf("://", StringComparison.Ordinal) is var scheme and >= 0)
+        {
+            s = s[(scheme + 3)..];
+        }
+        var host = s.Split('/', '?', '#')[0];
+        host = host[(host.LastIndexOf('@') + 1)..].Split(':')[0];
+        if (host.StartsWith("www.", StringComparison.Ordinal))
+        {
+            host = host[4..];
+        }
+        host = host.TrimEnd('.');
+        var ok = host.Length is >= 3 and <= 253 && host.Contains('.')
+            && host.Split('.').All(l => l.Length > 0 && !l.StartsWith('-') && !l.EndsWith('-'))
+            && host.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-');
+        return ok ? host : "";
+    }
+
+    /// <summary>Whether <paramref name="host"/> is on <paramref name="site"/> (the site itself or one of its subdomains).</summary>
+    public static bool OnSite(string host, string site) =>
+        host.Equals(site, StringComparison.OrdinalIgnoreCase) || host.EndsWith("." + site, StringComparison.OrdinalIgnoreCase);
+
     private static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim()[..Math.Min(s.Trim().Length, 120)];
 
     /// <summary>The apps with sound on the default output now, loudest first (LightSync itself left out).</summary>

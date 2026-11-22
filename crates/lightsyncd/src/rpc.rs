@@ -53,7 +53,8 @@
 //!   name, grid place when known). A trigger target can be one LED: `"<device id>@<index>"`.
 //!   Triggers always paint over the device's own lighting (whatever effect it shows).
 //! - `shutdown` -> true: save, then the service exits (the app closing entirely).
-//! - `set_apps { apps: [name] }` -> true: which programs watched by `app_running` triggers run now.
+//! - `set_apps { apps: [name] }` -> true: which programs watched by `app_running` triggers run now
+//!   ("chrome.exe"), and which watched sites a browser shows now ("chrome.exe/youtube.com").
 //! - `move_trigger { id, to }` -> `[Trigger]`: move a trigger to position `to`. The list order is the
 //!   priority: where triggers light the same LEDs, the one higher in the list is painted on top.
 //! - `input_event { kind: "key"|"mouse_click"|"mouse_move", vk?, button? }` -> `{ fired }`: input

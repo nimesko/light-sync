@@ -123,7 +123,13 @@ pub enum Source {
     AudioLevel { band: Band, above: f32 },
     /// An application is running (its program file, e.g. "cs2.exe"): its `lighting` shows on the
     /// targets for as long as it runs. The UI reports which of these programs run.
-    AppRunning { app: String },
+    AppRunning {
+        app: String,
+        /// Only while the browser's current page is on this site (a host such as "youtube.com",
+        /// which also covers "music.youtube.com"; no paths or queries).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        site: Option<String>,
+    },
 }
 
 impl Source {
@@ -218,6 +224,33 @@ pub fn app_name(s: &str) -> String {
     }
 }
 
+/// A web site's host from what the user typed or a browser shows: lowercase, without the scheme,
+/// "www.", port, path, query or fragment ("https://www.YouTube.com/watch?v=1" -> "youtube.com").
+/// Empty if it is not a host.
+pub fn site_host(s: &str) -> String {
+    let s = s.trim().to_lowercase();
+    let s = s.split_once("://").map_or(s.as_str(), |(_, rest)| rest);
+    let host = s.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = host.split(':').next().unwrap_or("");
+    let host = host.strip_prefix("www.").unwrap_or(host).trim_end_matches('.');
+    let ok = host.len() >= 3
+        && host.len() <= 253
+        && host.contains('.')
+        && host.split('.').all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-'))
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    if ok { host.to_string() } else { String::new() }
+}
+
+/// What the UI is asked to check, and reports back when it holds: "chrome.exe" (the app runs) or
+/// "chrome.exe/youtube.com" (and its current page is on that site).
+pub fn watch_key(app: &str, site: Option<&str>) -> String {
+    match site {
+        Some(s) => format!("{app}/{s}"),
+        None => app.to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Trigger {
     #[serde(default)]
@@ -297,10 +330,18 @@ pub fn validate(mut t: Trigger, scene: &Scene) -> Result<Trigger> {
     match &mut t.source {
         Source::Key { keys: Keys::Codes(c) } if c.is_empty() => bail!("'keys' must be \"any\" or a non-empty list of key codes"),
         Source::AudioLevel { above, .. } if !(0.0..=1.0).contains(above) => bail!("'above' must be 0..1"),
-        Source::AppRunning { app } => {
+        Source::AppRunning { app, site } => {
             *app = app_name(app);
             if app.len() < 5 || app.len() > 128 {
                 bail!("'app' must be a program file name such as \"game.exe\"");
+            }
+            if let Some(s) = site.as_deref() {
+                let host = site_host(s);
+                *site = match host.as_str() {
+                    "" if s.trim().is_empty() => None,
+                    "" => bail!("'site' must be a web site's host such as \"youtube.com\""),
+                    _ => Some(host),
+                };
             }
         }
         _ => {}
@@ -409,7 +450,12 @@ pub fn input_wanted(scene: &Scene) -> InputWanted {
             }
             Source::MouseClick { .. } => w.mouse_click = true,
             Source::MouseMove => w.mouse_move = true,
-            Source::AppRunning { app } if !w.apps.contains(app) => w.apps.push(app.clone()),
+            Source::AppRunning { app, site } => {
+                let key = watch_key(app, site.as_deref());
+                if !w.apps.contains(&key) {
+                    w.apps.push(key);
+                }
+            }
             _ => {}
         }
     }
@@ -551,7 +597,17 @@ impl Engine {
 
     /// Which watched programs run now (from the UI). Returns whether that changed.
     pub fn set_apps(&mut self, apps: Vec<String>) -> bool {
-        let mut apps: Vec<String> = apps.iter().map(|a| app_name(a)).filter(|a| !a.is_empty()).collect();
+        let mut apps: Vec<String> = apps
+            .iter()
+            .filter_map(|a| match a.split_once('/') {
+                // "chrome.exe/youtube.com": the app, on that site.
+                Some((app, site)) => {
+                    let (app, site) = (app_name(app), site_host(site));
+                    (!app.is_empty() && !site.is_empty()).then(|| watch_key(&app, Some(&site)))
+                }
+                None => Some(app_name(a)).filter(|a| !a.is_empty()),
+            })
+            .collect();
         apps.sort();
         apps.dedup();
         apps.truncate(64);
@@ -703,8 +759,8 @@ impl Engine {
         let mut items: Vec<Item> = vec![];
         if !scene.off {
             for (k, t) in scene.triggers.iter().enumerate().filter(|(_, t)| t.enabled) {
-                if let (Source::AppRunning { app }, Action::Lighting { state, .. }) = (&t.source, &t.action) {
-                    if self.apps.contains(app) {
+                if let (Source::AppRunning { app, site }, Action::Lighting { state, .. }) = (&t.source, &t.action) {
+                    if self.apps.contains(&watch_key(app, site.as_deref())) {
                         items.push(Item {
                             lighting: Some(state.clone()),
                             targets: t.targets.iter().flat_map(|id| scene.expand(id)).collect(),
@@ -1121,7 +1177,7 @@ mod tests {
     fn app_lighting_and_priority() {
         let app = |id: &str, color: &str| trig(json!({"id":id,"name":format!("game {id}"),"source":{"kind":"app_running","app":"C:\\Games\\Game.EXE"},"action":{"kind":"lighting","effect":"static","color":color,"brightness":100,"speed":50}}));
         let ok = validate(app("", "00FF00"), &Scene::default()).unwrap();
-        assert_eq!(ok.source, Source::AppRunning { app: "game.exe".into() });
+        assert_eq!(ok.source, Source::AppRunning { app: "game.exe".into(), site: None });
         // An app condition only with lighting (lighting itself goes with any trigger).
         assert!(validate(trig(json!({"name":"x","source":{"kind":"app_running","app":"a.exe"},"action":{"kind":"pulse","duration_ms":200}})), &Scene::default()).is_err());
         let mut s = scene_with(vec![validate(app("t1", "00ff00"), &Scene::default()).unwrap(), validate(app("t2", "0000ff"), &Scene::default()).unwrap()]);
@@ -1147,6 +1203,40 @@ mod tests {
         assert_eq!(paint(&mut e, &s), Color::new(255, 0, 0));
         assert!(e.set_apps(vec![]));
         assert!(!e.set_apps(vec![]));
+    }
+
+    #[test]
+    fn app_on_a_web_site() {
+        // Only the host is kept: no scheme, www., port, path or query.
+        assert_eq!(site_host("https://www.YouTube.com/watch?v=1"), "youtube.com");
+        assert_eq!(site_host("music.youtube.com/playlist"), "music.youtube.com");
+        assert_eq!(site_host("http://user@example.org:8080/a#b"), "example.org");
+        for bad in ["", "youtube", "not a site.com", "http://", "a..b.com", "-x.com"] {
+            assert_eq!(site_host(bad), "", "{bad}");
+        }
+        let site = |id: &str, s: &str| {
+            trig(json!({"id":id,"name":"yt","source":{"kind":"app_running","app":"chrome.exe","site":s},"action":{"kind":"lighting","effect":"static","color":"ff0000","brightness":100,"speed":50}}))
+        };
+        let t = validate(site("t1", "https://www.YouTube.com/watch?v=1"), &Scene::default()).unwrap();
+        assert_eq!(t.source, Source::AppRunning { app: "chrome.exe".into(), site: Some("youtube.com".into()) });
+        assert!(validate(site("t2", "not a site"), &Scene::default()).is_err());
+        let blank = validate(site("t3", " "), &Scene::default()).unwrap();
+        assert_eq!(blank.source, Source::AppRunning { app: "chrome.exe".into(), site: None });
+        // The UI is asked for the app on the site, and lights only while that holds.
+        let s = scene_with(vec![t]);
+        assert_eq!(input_wanted(&s).apps, ["chrome.exe/youtube.com"]);
+        let mut e = Engine::default();
+        let lit = |e: &mut Engine| {
+            let mut frame = vec![Color::BLACK; 2];
+            e.overlay(&s, ms(0), &AudioLevels::SILENT).apply(&dev(2), &s, &mut frame);
+            frame[0] != Color::BLACK
+        };
+        e.set_apps(vec!["chrome.exe".into()]);
+        assert!(!lit(&mut e), "the browser alone is not enough");
+        e.set_apps(vec!["Chrome.exe/www.YouTube.com".into()]);
+        assert!(lit(&mut e));
+        e.set_apps(vec!["chrome.exe/github.com".into()]);
+        assert!(!lit(&mut e));
     }
 
     #[test]

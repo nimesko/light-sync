@@ -249,13 +249,39 @@ public sealed partial class MainWindow
         // The app: picked from the apps running now (icon, name, window), searchable; typing a program
         // name still works for apps that aren't open.
         var appExe = t.Source["app"]?.ToString() ?? "";
-        var appPicker = BuildAppPicker(appExe, exe => appExe = exe);
+        // A browser: optionally only while its current page is on a site (just the host).
+        var siteBox = new TextBox
+        {
+            Header = "Website (optional)",
+            PlaceholderText = "For example youtube.com or music.youtube.com",
+            Text = t.Source["site"]?.ToString() ?? "",
+            MaxLength = 253,
+        };
+        var siteNote = Caption("");
+        var sitePanel = new StackPanel { Spacing = 4, Children = { siteBox, siteNote } };
+        void ShowSite()
+        {
+            sitePanel.Visibility = NowPlaying.IsBrowser(appExe) ? Visibility.Visible : Visibility.Collapsed;
+            var host = NowPlaying.SiteHost(siteBox.Text);
+            siteNote.Text = siteBox.Text.Trim().Length == 0
+                ? "Empty: any page. With a site, only while a window of this browser shows a page on it (its current tab)."
+                : host.Length == 0 ? "That isn't a web site's address: type its host, like youtube.com."
+                : $"Only while a window of this browser shows a page on {host} (or a part of it, like music.{host}).";
+        }
+        siteBox.TextChanged += (_, _) => ShowSite();
+        var appPicker = BuildAppPicker(appExe, exe =>
+        {
+            appExe = exe;
+            ShowSite();
+        });
+        ShowSite();
         var appPanel = new StackPanel
         {
             Spacing = 6,
-            Children = { appPicker, Caption("While the app runs, its lighting replaces what the devices show; when it closes, they go back.") },
+            Children = { appPicker, sitePanel, Caption("While the app runs, its lighting replaces what the devices show; when it closes, they go back.") },
         };
         string AppText() => appExe.Trim();
+        string SiteText() => NowPlaying.IsBrowser(appExe) ? NowPlaying.SiteHost(siteBox.Text) : "";
 
         // ---------- 2. Devices ----------
         var picked = new HashSet<string>(t.Targets);
@@ -669,6 +695,10 @@ public sealed partial class MainWindow
                     break;
                 case "app_running":
                     src["app"] = AppText();
+                    if (SiteText() is { Length: > 0 } site)
+                    {
+                        src["site"] = site;
+                    }
                     break;
             }
             var a = ActionKind();
@@ -765,6 +795,10 @@ public sealed partial class MainWindow
                 if (s == "key" && keys.Count == 0)
                 {
                     problem = "Record at least one key, or pick \"Any key is pressed\".";
+                }
+                else if (s == "app_running" && NowPlaying.IsBrowser(appExe) && siteBox.Text.Trim().Length > 0 && SiteText().Length == 0)
+                {
+                    problem = "Type the web site's host, like youtube.com, or leave Website empty.";
                 }
                 else if (s == "app_running" && AppText().Length == 0)
                 {

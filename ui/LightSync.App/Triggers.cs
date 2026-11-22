@@ -192,7 +192,34 @@ public sealed partial class MainWindow
                     p.Dispose();
                 }
             }
-            return watched.Where(names.Contains).ToList();
+            // "chrome.exe" holds while it runs; "chrome.exe/youtube.com" while one of its windows shows a page
+            // on that site (read once per browser, only when a trigger watches a site).
+            var hosts = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var holds = new List<string>();
+            foreach (var w in watched)
+            {
+                var slash = w.IndexOf('/');
+                var app = slash < 0 ? w : w[..slash];
+                if (!names.Contains(app))
+                {
+                    continue;
+                }
+                if (slash < 0)
+                {
+                    holds.Add(w);
+                    continue;
+                }
+                var site = w[(slash + 1)..];
+                if (!hosts.TryGetValue(app, out var open))
+                {
+                    open = hosts[app] = NowPlaying.CurrentHosts(app);
+                }
+                if (open.Any(h => NowPlaying.OnSite(h, site)))
+                {
+                    holds.Add(w);
+                }
+            }
+            return holds;
         });
         await _client.SetAppsAsync(running);
     }
@@ -654,7 +681,7 @@ public sealed partial class MainWindow
                 var above = s["above"] is JsonValue v && v.TryGetValue<double>(out var d) ? d : 0.5;
                 return $"{band} is above {Math.Round(above * 100)}%";
             case "app_running":
-                return $"{s["app"]} is running";
+                return s["site"]?.ToString() is { Length: > 0 } site ? $"{s["app"]} is on {site}" : $"{s["app"]} is running";
             default:
                 return $"\"{kind}\" happens";
         }

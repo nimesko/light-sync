@@ -82,6 +82,14 @@ const GLOBAL_TAU: f32 = 6.0;
 const BAND_REF_MIN: f32 = 0.1;
 /// ...nor below this absolute amplitude (-40 dBFS: near-silence stays dark).
 const REF_FLOOR: f32 = 0.01;
+/// Input gain: quiet sound is turned up so its recent peak reaches `INPUT_TARGET` (at most
+/// `INPUT_MAX_GAIN` times), so the lights work at a low Windows volume too (on some outputs, e.g.
+/// virtual devices like SteelSeries Sonar, the captured sound is already turned down by it). Below
+/// `INPUT_GATE` (-70 dBFS) it is left alone: that is silence. The peak falls over `INPUT_TAU` s.
+const INPUT_TARGET: f32 = 0.25;
+const INPUT_MAX_GAIN: f32 = 32.0;
+const INPUT_GATE: f32 = 3.0e-4;
+const INPUT_TAU: f32 = 4.0;
 /// Smoothing time constants (seconds): bands jump up and fall back slower.
 const ATTACK: f32 = 0.008;
 const RELEASE: f32 = 0.12;
@@ -258,6 +266,9 @@ pub struct Analyzer {
     ioi_count: usize,
     /// Beats detected so far.
     pub beats: u64,
+    /// The input's recent peak, and how much it falls per sample (the input gain follows it).
+    in_peak: f32,
+    in_fall: f32,
     centroid: f32,
     mood: f32,
     energy: f32,
@@ -354,6 +365,8 @@ impl Analyzer {
             iois: [0.0; IOIS],
             ioi_count: 0,
             beats: 0,
+            in_peak: 0.0,
+            in_fall: (-1.0 / (INPUT_TAU * rate)).exp(),
             centroid: 0.0,
             mood: 0.5,
             energy: 0.0,
@@ -367,11 +380,13 @@ impl Analyzer {
         self.rates.dt
     }
 
-    /// Feed interleaved samples (-1..1) with `channels` channels; they are mixed down to mono.
+    /// Feed interleaved samples (-1..1) with `channels` channels; they are mixed down to mono. The mix is
+    /// the sum scaled for stereo, not the average: on a 7.1 output stereo music only fills 2 of the 8
+    /// channels, and averaging would turn it down by 12 dB.
     pub fn push(&mut self, samples: &[f32], channels: usize) {
         let ch = channels.max(1);
         for frame in samples.chunks(ch) {
-            let s = frame.iter().sum::<f32>() / frame.len() as f32;
+            let s = frame.iter().sum::<f32>() / frame.len().min(2) as f32;
             self.sample(if s.is_finite() { s } else { 0.0 });
         }
     }
@@ -385,7 +400,10 @@ impl Analyzer {
     }
 
     fn sample(&mut self, s: f32) {
-        self.ring[self.pos] = s;
+        // Input gain from the recent peak (see INPUT_TARGET).
+        self.in_peak = (self.in_peak * self.in_fall).max(s.abs());
+        let gain = if self.in_peak < INPUT_GATE { 1.0 } else { (INPUT_TARGET / self.in_peak).clamp(1.0, INPUT_MAX_GAIN) };
+        self.ring[self.pos] = s * gain;
         self.pos = (self.pos + 1) % self.n;
         self.since_hop += 1;
         if self.since_hop >= self.hop {
@@ -1227,6 +1245,23 @@ mod tests {
         }
         assert!(n >= 19, "{n} of 20 accented kicks");
         assert!((a.levels().tempo * 60.0 - 120.0).abs() < 5.0, "tempo {}", a.levels().tempo * 60.0);
+        // Turned down (-35 dB, a low Windows volume) and in stereo on a 7.1 output (6 silent channels):
+        // the same beats and full levels.
+        let quiet: Vec<f32> = edm(32, false).iter().flat_map(|&s| [0.018 * s, 0.018 * s, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).collect();
+        let mut a = Analyzer::new(RATE);
+        let mut levels = vec![];
+        let mut n = 0;
+        for part in quiet.chunks(480 * 8) {
+            let before = a.beats;
+            a.push(part, 8);
+            levels.push(a.levels().level);
+            if a.beats > before && levels.len() > 120 {
+                n += 1;
+            }
+        }
+        let avg = levels[200..].iter().sum::<f32>() / (levels.len() - 200) as f32;
+        assert!(avg > 0.6, "quiet 7.1 level {avg}");
+        assert!((27..=29).contains(&n), "quiet 7.1 beats {n}");
         // Without the music's dynamics (a steady tone) the punch rests at the middle.
         let mut a = Analyzer::new(RATE);
         a.push(&tone(60.0, 0.5, 3.0, 1), 1);

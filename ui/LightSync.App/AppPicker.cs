@@ -189,10 +189,17 @@ public sealed partial class MainWindow
         top.Children.Add(search);
         Grid.SetColumn(refresh, 1);
         top.Children.Add(refresh);
+        // A flyout is at most 456 px wide by default and stays inside the window: let it be as wide as the
+        // list and open as its own popup (aligned to the button's right edge, where the button is).
+        var presenter = new Style(typeof(FlyoutPresenter));
+        presenter.Setters.Add(new Setter(FrameworkElement.MaxWidthProperty, 640.0));
+        presenter.Setters.Add(new Setter(FrameworkElement.MaxHeightProperty, 640.0));
         var flyout = new Flyout
         {
-            Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedLeft,
-            Content = new StackPanel { Width = 460, Spacing = 8, Children = { top, list, count } },
+            Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight,
+            ShouldConstrainToRootBounds = false,
+            FlyoutPresenterStyle = presenter,
+            Content = new StackPanel { Width = 480, Spacing = 8, Children = { top, list, count } },
         };
         choose.Flyout = flyout;
         var apps = new List<RunningApp>();
@@ -204,15 +211,16 @@ public sealed partial class MainWindow
             return file.Length == 0 ? "" : file.EndsWith(".exe", StringComparison.Ordinal) ? file : file + ".exe";
         }
 
-        FrameworkElement Row(string icon, string? path, string name, string detail)
+        FrameworkElement Row(string icon, string? path, string name, string detail, string tag)
         {
-            var g = new Grid { ColumnSpacing = 12, Padding = new Thickness(0, 4, 0, 4) };
+            // The tag (the program to pick) is on the row too: a click reports the row, not its ListViewItem.
+            var g = new Grid { ColumnSpacing = 12, Padding = new Thickness(0, 4, 0, 4), Tag = tag, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             g.Children.Add(path is null ? new FontIcon { Glyph = icon, FontSize = 20, Width = 32, Foreground = secondary } : IconSlot(path));
             var t = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            t.Children.Add(new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis });
-            t.Children.Add(new TextBlock { Text = detail, Style = caption, Foreground = secondary, TextTrimming = TextTrimming.CharacterEllipsis });
+            t.Children.Add(new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap });
+            t.Children.Add(new TextBlock { Text = detail, Style = caption, Foreground = secondary, TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap });
             Grid.SetColumn(t, 1);
             g.Children.Add(t);
             return g;
@@ -229,11 +237,11 @@ public sealed partial class MainWindow
             var typed = Typed(q);
             if (typed.Length > 4 && shown.All(a => !a.Exe.Equals(typed, StringComparison.OrdinalIgnoreCase)))
             {
-                items.Add(new ListViewItem { Content = Row("", null, $"Use \"{typed}\"", "For an app that isn't open right now"), Tag = typed });
+                items.Add(new ListViewItem { Content = Row("", null, $"Use \"{typed}\"", "For an app that isn't open right now", typed), Tag = typed });
             }
             foreach (var a in shown)
             {
-                items.Add(new ListViewItem { Content = Row("", a.Path ?? "", a.Name, $"{a.Exe} · {a.Title}"), Tag = a.Exe });
+                items.Add(new ListViewItem { Content = Row("", a.Path ?? "", a.Name, $"{a.Exe} · {a.Title}", a.Exe), Tag = a.Exe });
             }
             list.ItemsSource = items;
             count.Text = apps.Count == 0 ? "Looking for running apps..." : shown.Count == 0 ? "No running app matches." : $"{shown.Count} of {apps.Count} running apps";
@@ -258,7 +266,8 @@ public sealed partial class MainWindow
         };
         list.ItemClick += (_, e) =>
         {
-            if (e.ClickedItem is ListViewItem { Tag: string chosen })
+            // The click reports the row's content (the row grid); both carry the program in their tag.
+            if (e.ClickedItem is FrameworkElement { Tag: string chosen })
             {
                 Pick(chosen);
             }

@@ -508,7 +508,7 @@ public sealed partial class MainWindow
             lightSound.Root.Visibility = palette.Visibility;
             lightSound.Polling = soundEffect;
 
-            lightSound.Recolor(EffectId(), color, PaletteId());
+            lightSound.Recolor(color, PaletteId());
             lightSpeed.Header = soundEffect ? "Sensitivity" : "Speed";
             var musicSource = s is "audio_beat" or "audio_level";
             whenSound.Root.Visibility = musicSource ? Visibility.Visible : Visibility.Collapsed;

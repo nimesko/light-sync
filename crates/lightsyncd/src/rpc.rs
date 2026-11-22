@@ -7,11 +7,11 @@
 //! - `get_target { target }` -> the state that target currently shows
 //! - `set_state { target?, effect?, color?, brightness?, speed?, palette?, split?, colors? }` -> applied within one frame;
 //!   effects: see effects.rs (snake_case names, e.g. static, breathing, rainbow_wave, heartbeat);
-//!   sound reactive: sound_pulse, spectrum_bars, beat_flash (sound is captured only while one of
-//!   them is visible; their `speed` is sensitivity, or how fast beat_flash fades; `palette` recolors
-//!   them: effect (their own colors), rainbow, random, cold_hot, low_high, fire, neon; sound_beat,
-//!   sound_bass and sound_spectrum also take `split` (device, zone or led: what one light is) and
-//!   `colors` (how many the random palette uses, 1..8, 0 = random on every beat))
+//!   sound reactive: sound_beat, sound_bass, sound_spectrum (sound is captured only while one of
+//!   them is visible; their `speed` is sensitivity, or how fast the beat fades); they take `split`
+//!   (device, zone or led: what one light is), `palette` (effect = the chosen color, rainbow,
+//!   random, cold_hot, low_high, fire, neon) and `colors` (how many the random palette uses, 1..8,
+//!   0 = a random number on every beat). Older sound effect names are read as the closest of these.
 //! - `groups` -> `[Group]`; `save_group { id?, name, members }` -> Group; `delete_group { id }`
 //! - `set_layout { zone, fans, leds_per_fan }` -> split an addressable header into fans (fans 0 = remove)
 //! - `set_color { color }`, `set_brightness { brightness }` -> shortcuts for `set_state` on "all"
@@ -1022,7 +1022,7 @@ mod tests {
     #[tokio::test]
     async fn audio_is_captured_only_while_an_audio_effect_is_visible() {
         let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let loud = AudioLevels { level: 1.0, bass: 1.0, mid: 1.0, treble: 1.0, beat: true, beat_age: 0.0, level_punch: 1.0, ..AudioLevels::SILENT };
+        let loud = AudioLevels { level: 1.0, bass: 1.0, mid: 1.0, treble: 1.0, beat: true, beat_age: 0.0, level_punch: 1.0, bass_punch: 1.0, ..AudioLevels::SILENT };
         let audio = FakeAudio { active: active.clone(), levels: loud };
         let mut d = Daemon::new(Fake::default(), None).with_audio(Box::new(audio));
         let on = || active.load(std::sync::atomic::Ordering::SeqCst);
@@ -1076,7 +1076,7 @@ mod tests {
             slot: (0, 1),
         };
         let mut scene = Scene::default();
-        scene.default.effect = Effect::BeatFlash;
+        scene.default.effect = Effect::SoundBeat;
         scene.default.color = "0000ff".into();
         let beat = AudioLevels { beat: true, beat_age: 0.0, ..AudioLevels::SILENT };
         assert_eq!(device_frame(&scene, &dev, 1.0, &beat), vec![Color::new(0, 0, 255); 4]);

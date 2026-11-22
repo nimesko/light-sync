@@ -156,15 +156,15 @@ public sealed class SoundVisualizer
     /// <summary>Whether the view can be seen on the page (shown, and part of the window).</summary>
     public bool IsShown => Polling && Root.IsLoaded && Root.Visibility == Visibility.Visible;
 
-    /// <summary>Paint the bars for this effect, color and sound palette (as the lights get them).</summary>
-    public void Recolor(string effect, Color color, string palette)
+    /// <summary>Paint the bars in the chosen color and sound palette (as the lights get them).</summary>
+    public void Recolor(Color color, string palette)
     {
         _palette = palette;
         if (palette == "effect")
         {
             for (var i = 0; i < Bands; i++)
             {
-                _barBrushes[i].Color = EffectColor(effect, color, (double)i / (Bands - 1));
+                _barBrushes[i].Color = color;
             }
         }
     }
@@ -247,19 +247,6 @@ public sealed class SoundVisualizer
     }
 
     /// <summary>
-    /// A band's color with the effect's own colors: the spectrum effects use the service's band hues (red
-    /// bass to violet treble, band_hue in effects.rs), the level meter green / yellow / red, bass &amp;
-    /// treble warm and cool, the others the chosen color.
-    /// </summary>
-    private static Color EffectColor(string effect, Color color, double x) => effect switch
-    {
-        "spectrum_analyzer" or "spectrum_bars" or "music_flow" => Hue(0.78 * x),
-        "bass_treble" => x < 0.5 ? Color.FromArgb(255, 255, 40, 70) : Color.FromArgb(255, 150, 215, 255),
-        "vu_meter" => Hue(x < 0.55 ? 1.0 / 3 : x < 0.8 ? 1.0 / 3 - (x - 0.55) / 0.25 / 6 : Math.Max(0, 1.0 / 6 - (x - 0.8) / 0.12 / 6)),
-        _ => color,
-    };
-
-    /// <summary>
     /// A band's color with a sound palette (recolor in effects.rs): the rainbow along the bands, by how
     /// loud it is (cold to hot, fire), a new color per beat (random), or pink and cyan halves swapping on
     /// the beat (neon).
@@ -306,7 +293,7 @@ public sealed partial class MainWindow
     /// <summary>Sound palettes for the sound effects: id, name, what it does (effects.rs Palette).</summary>
     internal static readonly (string Id, string Name, string Tip)[] SoundPalettes =
     [
-        ("effect", "Effect colors", "The effect's own colors: the color you pick, or its built-in ones"),
+        ("effect", "One color", "The color you pick, for every light"),
         ("rainbow", "Rainbow", "Every color of the rainbow along each device, drifting with the music"),
         ("random", "Random", "A new random color on every beat"),
         ("cold_hot", "Cold to hot", "By how loud it is: blue when quiet, through green and yellow, to red at the loudest"),
@@ -355,7 +342,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>Paint the device view's bars in the colors the lights get for the selected sound effect.</summary>
-    private void RecolorAnalyzer() => _deviceSound?.Recolor(_effect, _color, _palette);
+    private void RecolorAnalyzer() => _deviceSound?.Recolor(_color, _palette);
 
     /// <summary>Which views poll: the device view while a sound effect is selected, Home while it is shown.</summary>
     private void UpdateSoundViews()

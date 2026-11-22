@@ -20,11 +20,10 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private sealed record EffectOption(string Id, string Name, bool UsesColor, bool Audio = false, string Group = "Calm & solid");
 
-    private const string Calm = "Calm & solid", Motion = "Motion", Colorful = "Colorful & nature", Alerts = "Alerts", Sound = "Sound reactive",
-        MoreSound = "More sound effects";
+    private const string Calm = "Calm & solid", Motion = "Motion", Colorful = "Colorful & nature", Alerts = "Alerts", Sound = "Sound reactive";
 
     /// <summary>Effect families, in the order lists show them.</summary>
-    private static readonly string[] EffectGroups = [Calm, Motion, Colorful, Alerts, Sound, MoreSound];
+    private static readonly string[] EffectGroups = [Calm, Motion, Colorful, Alerts, Sound];
 
     private static readonly EffectOption[] Effects =
     [
@@ -57,17 +56,6 @@ public sealed partial class MainWindow : Window
         new("sound_beat", "Beat", true, Audio: true, Group: Sound),
         new("sound_bass", "Bass", true, Audio: true, Group: Sound),
         new("sound_spectrum", "Spectrum", true, Audio: true, Group: Sound),
-        // The classic sound effects (each with its own look).
-        new("sound_pulse", "Sound pulse", true, Audio: true, Group: MoreSound),
-        new("spectrum_bars", "Spectrum bars", false, Audio: true, Group: MoreSound),
-        new("beat_flash", "Beat flash", true, Audio: true, Group: MoreSound),
-        new("spectrum_analyzer", "Spectrum analyzer", false, Audio: true, Group: MoreSound),
-        new("bass_glow", "Bass glow", true, Audio: true, Group: MoreSound),
-        new("vu_meter", "VU meter", false, Audio: true, Group: MoreSound),
-        new("bass_treble", "Bass & treble", false, Audio: true, Group: MoreSound),
-        new("treble_sparkle", "Treble sparkle", true, Audio: true, Group: MoreSound),
-        new("bass_wave", "Bass wave", true, Audio: true, Group: MoreSound),
-        new("music_flow", "Music flow", false, Audio: true, Group: MoreSound),
     ];
     private static EffectOption EffectById(string id) => Effects.FirstOrDefault(e => e.Id == id) ?? Effects[0];
 
@@ -627,7 +615,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowSoundOptions(EffectOption effect)
     {
-        var split = effect.Id is "sound_beat" or "sound_bass" or "sound_spectrum";
+        var split = effect.Audio;
         SoundOptions.Visibility = split ? Visibility.Visible : Visibility.Collapsed;
         foreach (var (id, b) in _splitButtons)
         {
@@ -646,10 +634,6 @@ public sealed partial class MainWindow : Window
         _syncingColorCount = true;
         ColorCountBox.SelectedIndex = Math.Clamp(_colors, 0, 8);
         _syncingColorCount = false;
-        if (effect.Group == MoreSound)
-        {
-            MoreSoundExpander.IsExpanded = true;
-        }
     }
 
     // ---------- sound palettes ----------
@@ -2064,7 +2048,7 @@ public sealed partial class MainWindow : Window
     {
         // Non-sound effects in their families, each under a small title.
         var groupPanels = new Dictionary<string, Panel>();
-        foreach (var group in EffectGroups.Where(g => g is not (Sound or MoreSound)))
+        foreach (var group in EffectGroups.Where(g => g != Sound))
         {
             EffectTiles.Children.Add(new TextBlock
             {
@@ -2100,7 +2084,7 @@ public sealed partial class MainWindow : Window
             };
             button.Click += (_, _) => SetEffect(effect.Id);
             _effectButtons[effect.Id] = button;
-            Panel tiles = effect.Group == Sound ? SoundTiles : effect.Group == MoreSound ? MoreSoundTiles : groupPanels.GetValueOrDefault(effect.Group) ?? groupPanels[Calm];
+            Panel tiles = effect.Group == Sound ? SoundTiles : groupPanels.GetValueOrDefault(effect.Group) ?? groupPanels[Calm];
             tiles.Children.Add(button);
         }
     }
@@ -2184,15 +2168,6 @@ public sealed partial class MainWindow : Window
         "candle" => Gradient(Stops(Dim(c, 0.6), c, Dim(c, 0.8), Dim(c, 0.5), c)),
         "ocean" => Gradient(Stops(Color.FromArgb(255, 0, 90, 170), Color.FromArgb(255, 0, 170, 200), Color.FromArgb(255, 0, 60, 140), Color.FromArgb(255, 40, 190, 210))),
         "police" => Gradient(Stops(Color.FromArgb(255, 255, 0, 0), Color.FromArgb(255, 60, 0, 0), Color.FromArgb(255, 0, 10, 70), Color.FromArgb(255, 0, 40, 255))),
-        "sound_pulse" => Gradient(Stops(Dim(c, 0.2), c, Dim(c, 0.35), Dim(c, 0.8), Dim(c, 0.15), c, Dim(c, 0.3))),
-        "spectrum_bars" => Gradient(Stops(Color.FromArgb(255, 255, 40, 0), Color.FromArgb(255, 255, 200, 0), Color.FromArgb(255, 0, 220, 90), Color.FromArgb(255, 0, 140, 255))),
-        "beat_flash" => Gradient(Stops(c, Dim(c, 0.4), Dim(c, 0.1), Dim(c, 0.05), c, Dim(c, 0.3), Dim(c, 0.05))),
-        "spectrum_analyzer" => HueBrush(1),
-        "bass_glow" => Gradient(Stops(Dim(c, 0.15), Dim(c, 0.6), c, Dim(c, 0.6), Dim(c, 0.15))),
-        "bass_treble" => Gradient(Stops(Color.FromArgb(255, 255, 30, 60), Color.FromArgb(255, 180, 0, 40), Color.FromArgb(255, 30, 10, 20), Color.FromArgb(255, 160, 220, 255), Color.FromArgb(255, 20, 20, 30), Color.FromArgb(255, 200, 240, 255))),
-        "treble_sparkle" => Gradient(Stops(Dim(c, 0.15), c, Dim(c, 0.1), Dim(c, 0.2), Color.FromArgb(255, 255, 255, 255), Dim(c, 0.15), c, Dim(c, 0.1))),
-        "bass_wave" => Gradient(Stops(Dim(c, 0.05), c, Dim(c, 0.15), Dim(c, 0.05), Dim(c, 0.15), c, Dim(c, 0.05))),
-        "music_flow" => Gradient(Stops(Color.FromArgb(255, 120, 20, 200), Color.FromArgb(255, 230, 30, 90), Color.FromArgb(255, 255, 170, 30), Color.FromArgb(255, 40, 210, 170), Color.FromArgb(255, 120, 20, 200))),
         "sound_beat" => Gradient(Stops(c, Dim(c, 0.35), Dim(c, 0.08), Dim(c, 0.04), c, Dim(c, 0.25), Dim(c, 0.05))),
         "sound_bass" => Gradient(Stops(Dim(c, 0.2), c, Dim(c, 0.5), Dim(c, 0.2), Dim(c, 0.7), c, Dim(c, 0.25))),
         "sound_spectrum" => HueBrush(1),
@@ -2204,7 +2179,6 @@ public sealed partial class MainWindow : Window
         "scanner" => Gradient(Stops(Dim(c, 0.03), Dim(c, 0.03), Dim(c, 0.3), c, Dim(c, 0.3), Dim(c, 0.03), Dim(c, 0.03))),
         "lightning_storm" => Gradient(Stops(Color.FromArgb(255, 5, 10, 35), Color.FromArgb(255, 10, 15, 45), Color.FromArgb(255, 220, 230, 255), Color.FromArgb(255, 60, 70, 120), Color.FromArgb(255, 5, 10, 35))),
         "neon_pulse" => Gradient(Stops(c, Dim(c, 0.2), ShiftHue(c, 0.5), Dim(ShiftHue(c, 0.5), 0.2), c)),
-        "vu_meter" => Gradient(Stops(Color.FromArgb(255, 0, 210, 80), Color.FromArgb(255, 0, 210, 80), Color.FromArgb(255, 255, 210, 0), Color.FromArgb(255, 255, 40, 0), Color.FromArgb(255, 40, 40, 40))),
         _ => new SolidColorBrush(c),
     };
 

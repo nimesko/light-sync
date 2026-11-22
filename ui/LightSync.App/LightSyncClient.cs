@@ -45,10 +45,10 @@ public sealed record LightStatus(string Effect, string Color, int Brightness, in
 
 /// <summary>What one target (device, zone, fan, group or "all") currently shows.</summary>
 /// <remarks><see cref="Palette"/>: the colors of a sound effect ("effect", "random", "cold_hot", "fire", "neon").</remarks>
-public sealed record TargetState(string Effect, string Color, int Brightness, int Speed, string Target, bool Own, string Palette = "effect");
+public sealed record TargetState(string Effect, string Color, int Brightness, int Speed, string Target, bool Own, string Palette = "effect", string Split = "zone", int Colors = 3);
 
 /// <summary>What a row of the device list shows: its lighting, whether it is set on that row itself, and for groups whether members differ.</summary>
-public sealed record RowState(string Effect, string Color, int Brightness, int Speed, bool Own, bool Mixed, bool On, string Palette = "effect");
+public sealed record RowState(string Effect, string Color, int Brightness, int Speed, bool Own, bool Mixed, bool On, string Palette = "effect", string Split = "zone", int Colors = 3);
 
 public sealed record GroupInfo(string Id, string Name, List<string> Members);
 
@@ -218,8 +218,8 @@ public sealed class LightSyncClient
     /// Set the lighting of one target: "all", a device / zone / fan id, or "group:" plus the group id.
     /// The service renders it continuously.
     /// </summary>
-    public Task SetStateAsync(string target, string effect, string hex, int brightness, int speed, string palette) =>
-        CallAsync("set_state", new { target, effect, color = hex, brightness, speed, palette });
+    public Task SetStateAsync(string target, string effect, string hex, int brightness, int speed, string palette, string split, int colors) =>
+        CallAsync("set_state", new { target, effect, color = hex, brightness, speed, palette, split, colors });
 
     public async Task<List<GroupInfo>> GroupsAsync() =>
         (await CallAsync("groups"))?.Deserialize<List<GroupInfo>>(Json) ?? [];

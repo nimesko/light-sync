@@ -314,6 +314,7 @@ impl RealLights {
                         zones,
                         hidden: false,
                         led_map: led_map(c),
+                        slot: (0, 1),
                     });
                 }
                 self.driven = driven;
@@ -328,6 +329,12 @@ impl RealLights {
         }
         if out.is_empty() && !errors.is_empty() {
             bail!("{}", errors.join("; "));
+        }
+        // Each shown device's place in the list (sound effects split by device spread over them).
+        let shown = out.iter().filter(|d| !scene.is_hidden(&d.id)).count();
+        let mut k = 0;
+        for d in &mut out {
+            d.slot = if scene.is_hidden(&d.id) { (0, 1) } else { k += 1; (k - 1, shown) };
         }
         self.cache = Some(out.clone());
         Ok(out)

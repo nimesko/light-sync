@@ -5,11 +5,13 @@
 //! - `status` -> `{ effect, color, brightness, speed, connected, error }` (the "all" state)
 //! - `devices` / `rescan` -> `[DeviceInfo]` with stable ids, zones, fans and `hidden: bool`
 //! - `get_target { target }` -> the state that target currently shows
-//! - `set_state { target?, effect?, color?, brightness?, speed?, palette? }` -> applied within one frame;
+//! - `set_state { target?, effect?, color?, brightness?, speed?, palette?, split?, colors? }` -> applied within one frame;
 //!   effects: see effects.rs (snake_case names, e.g. static, breathing, rainbow_wave, heartbeat);
 //!   sound reactive: sound_pulse, spectrum_bars, beat_flash (sound is captured only while one of
 //!   them is visible; their `speed` is sensitivity, or how fast beat_flash fades; `palette` recolors
-//!   them: effect (their own colors), rainbow, random, cold_hot, fire, neon)
+//!   them: effect (their own colors), rainbow, random, cold_hot, low_high, fire, neon; sound_beat,
+//!   sound_bass and sound_spectrum also take `split` (device, zone or led: what one light is) and
+//!   `colors` (how many the random palette uses, 1..8, 0 = random on every beat))
 //! - `groups` -> `[Group]`; `save_group { id?, name, members }` -> Group; `delete_group { id }`
 //! - `set_layout { zone, fans, leds_per_fan }` -> split an addressable header into fans (fans 0 = remove)
 //! - `set_color { color }`, `set_brightness { brightness }` -> shortcuts for `set_state` on "all"
@@ -64,7 +66,7 @@
 //!   at the mouse wheel / logo for mouse events, and reaches only that far.
 
 use crate::audio::{AudioSource, NoAudio};
-use crate::effects::{self, AudioLevels, Effect, LightState, Palette};
+use crate::effects::{self, AudioLevels, Effect, LightState, Palette, Split, Spot};
 use crate::scene::{FanLayout, Group, Scene};
 use crate::triggers::{self, Engine, Input, MouseButton, Overlay, Trigger};
 use anyhow::{anyhow, bail, Result};
@@ -109,6 +111,9 @@ pub struct DeviceInfo {
     /// Where each LED is and what it is called (for effects that start at a pressed key).
     #[serde(skip)]
     pub led_map: LedMap,
+    /// Its place among the devices LightSync lights: (index, count), for sound effects split by device.
+    #[serde(skip)]
+    pub slot: (usize, usize),
 }
 
 /// Names and grid positions of a device's LEDs, in frame order (both may be empty).
@@ -191,18 +196,22 @@ pub fn device_frame(scene: &Scene, d: &DeviceInfo, t: f32, audio: &AudioLevels) 
         return vec![Color::BLACK; n];
     }
     let mut frame = Vec::with_capacity(n);
-    for z in &d.zones {
+    let (device, devices) = d.slot;
+    let zones = d.zones.len().max(1);
+    for (zone, z) in d.zones.iter().enumerate() {
         let len = z.leds as usize;
         let offset = frame.len();
         for j in 0..len.min(n.saturating_sub(offset)) {
             let p = scene.pick(&d.id, &z.id, j, len, offset, n);
-            frame.push(effects::render_with(p.state, t, p.pos, p.len, audio));
+            let spot = Spot { i: p.pos, n: p.len, zone, zones, device, devices };
+            frame.push(effects::render_spot(p.state, t, &spot, audio));
         }
     }
     // LEDs outside any zone (should not happen) follow the device.
     while frame.len() < n {
         let i = frame.len();
-        frame.push(effects::render_with(scene.effective(&d.id), t, i, n, audio));
+        let spot = Spot { i, n, zone: 0, zones, device, devices };
+        frame.push(effects::render_spot(scene.effective(&d.id), t, &spot, audio));
     }
     frame
 }
@@ -222,7 +231,10 @@ fn hex(c: Color) -> String {
 }
 
 fn state_json(s: &LightState) -> Value {
-    json!({"effect": s.effect, "color": s.color, "brightness": s.brightness, "speed": s.speed, "palette": s.palette})
+    json!({
+        "effect": s.effect, "color": s.color, "brightness": s.brightness, "speed": s.speed,
+        "palette": s.palette, "split": s.split, "colors": s.colors,
+    })
 }
 
 impl<L: Lights> Daemon<L> {
@@ -529,6 +541,18 @@ impl<L: Lights> Daemon<L> {
                 .ok_or_else(|| anyhow!("'palette' must be a string"))?;
             next.palette = Palette::parse(name).ok_or_else(|| anyhow!("unknown palette '{name}'"))?;
         }
+        if let Some(v) = p.get("split") {
+            let name = v
+                .as_str()
+                .ok_or_else(|| anyhow!("'split' must be a string"))?;
+            next.split = Split::parse(name).ok_or_else(|| anyhow!("unknown split '{name}' (device, zone or led)"))?;
+        }
+        if let Some(v) = p.get("colors") {
+            next.colors = v
+                .as_u64()
+                .filter(|&c| c <= 8)
+                .ok_or_else(|| anyhow!("'colors' must be 0 (random) to 8"))? as u8;
+        }
         let before = self.scene.clone();
         self.scene.off = false;
         if target == "all" {
@@ -572,7 +596,7 @@ impl<L: Lights> Daemon<L> {
                                 Color::BLACK
                             } else {
                                 let s = self.scene.effective(&d.id);
-                                effects::render_with(s, t, 0, 1, &self.levels)
+                                effects::render_spot(s, t, &Spot { device: d.slot.0, devices: d.slot.1, ..Spot::led(0, 1) }, &self.levels)
                             });
                         }
                         overlay.apply(d, &self.scene, &mut frame);
@@ -949,6 +973,7 @@ mod tests {
             }],
             hidden: false,
             led_map: Default::default(),
+            slot: (0, 1),
         }
     }
 
@@ -1048,6 +1073,7 @@ mod tests {
             zones: vec![],
             hidden: false,
             led_map: Default::default(),
+            slot: (0, 1),
         };
         let mut scene = Scene::default();
         scene.default.effect = Effect::BeatFlash;
@@ -1322,6 +1348,27 @@ mod tests {
             .is_object());
         assert!(call(&mut d, r#"{"id":1,"method":"set_state","params":{"palette":"plaid"}}"#).await["error"].is_object());
         assert_eq!(d.scene, Scene::default());
+    }
+
+    #[tokio::test]
+    async fn sound_lights_per_zone_and_random_colors() {
+        let mut d = Daemon::new(Fake::default(), None);
+        let r = call(&mut d, r#"{"id":1,"method":"set_state","params":{"effect":"sound_beat","palette":"random","split":"zone","colors":0}}"#).await;
+        assert_eq!((r["result"]["split"].clone(), r["result"]["colors"].clone()), (json!("zone"), json!(0)));
+        for bad in [r#"{"split":"room"}"#, r#"{"colors":9}"#, r#"{"colors":"two"}"#] {
+            let req = format!(r#"{{"id":2,"method":"set_state","params":{bad}}}"#);
+            assert!(call(&mut d, &req).await["error"].is_object(), "{bad}");
+        }
+        // On a beat, every LED of a zone shares its zone's color.
+        let beat = AudioLevels { beat: true, beat_age: 0.0, beat_strength: 1.0, beat_count: 3, ..AudioLevels::SILENT };
+        let dev = board();
+        let frame = device_frame(&d.scene, &dev, 1.0, &beat);
+        let mut offset = 0;
+        for z in &dev.zones {
+            let zone = &frame[offset..offset + z.leds as usize];
+            assert!(zone.iter().all(|c| *c == zone[0] && c.r.max(c.g).max(c.b) > 200), "{}: {zone:?}", z.id);
+            offset += z.leds as usize;
+        }
     }
 
     #[tokio::test]

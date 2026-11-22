@@ -357,6 +357,17 @@
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap" Margin="0,0,0,10" />
                             <VariableSizedWrapGrid x:Name="SoundTiles" Orientation="Horizontal" ItemWidth="116" ItemHeight="80" />
+                            <!-- Beat / Bass / Spectrum: what one light is (filled in code) -->
+                            <StackPanel x:Name="SoundOptions" Visibility="Collapsed" Spacing="6" Margin="0,10,0,0">
+                                <TextBlock Text="Lights per" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <StackPanel x:Name="SplitButtons" Orientation="Horizontal" Spacing="6" />
+                                <TextBlock x:Name="SplitHint" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <Expander x:Name="MoreSoundExpander" Header="More sound effects" Margin="0,10,0,0"
+                                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                                <VariableSizedWrapGrid x:Name="MoreSoundTiles" Orientation="Horizontal" ItemWidth="116" ItemHeight="80" />
+                            </Expander>
                             <Border x:Name="AnalyzerHost" Visibility="Collapsed" Margin="0,12,0,0" Padding="12" CornerRadius="6"
                                     Background="{ThemeResource SubtleFillColorSecondaryBrush}" />
                         </StackPanel>
@@ -379,6 +390,11 @@
                                 <TextBlock Text="Color the sound effect by the music instead of one color." TextWrapping="Wrap"
                                            Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <VariableSizedWrapGrid x:Name="PaletteTiles" Orientation="Horizontal" ItemWidth="116" ItemHeight="64" />
+                                <StackPanel x:Name="ColorCountPanel" Orientation="Horizontal" Spacing="10" Visibility="Collapsed">
+                                    <TextBlock Text="Number of colors" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="ColorCountBox" MinWidth="150" SelectionChanged="ColorCount_SelectionChanged"
+                                              AutomationProperties.Name="Number of colors" />
+                                </StackPanel>
                             </StackPanel>
                             <TextBlock x:Name="ColorHint" Text="This effect uses its own colors." Margin="0,8,0,0" Visibility="Collapsed"
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />

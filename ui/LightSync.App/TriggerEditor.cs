@@ -390,9 +390,24 @@ public sealed partial class MainWindow
         };
         var paletteTip = Caption("");
         string PaletteId() => SoundPalettes[Math.Max(0, palette.SelectedIndex)].Id;
+        // Beat / Bass / Spectrum: what one light is, and how many colors random uses.
+        var split = new ComboBox
+        {
+            Header = "Lights per",
+            ItemsSource = Splits.Select(x => x.Name).ToList(),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            SelectedIndex = Math.Max(0, Array.FindIndex(Splits, x => x.Id == (t.Action["split"]?.ToString() ?? "zone"))),
+        };
+        var colorCount = new ComboBox
+        {
+            Header = "Number of colors",
+            ItemsSource = ColorCountNames,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            SelectedIndex = t.Action["colors"] is JsonValue cv && cv.TryGetValue<int>(out var cn) ? Math.Clamp(cn, 0, 8) : 3,
+        };
         // What LightSync hears now, painted like these lights will be.
         var lightSound = AddVisualizer(70);
-        var lightingPanel = new StackPanel { Spacing = 6, Children = { effect, palette, paletteTip, lightBrightness, lightSpeed, lightSound.Root } };
+        var lightingPanel = new StackPanel { Spacing = 6, Children = { effect, split, palette, paletteTip, colorCount, lightBrightness, lightSpeed, lightSound.Root } };
         string EffectId() => effectCombo.Selected ?? "static";
         // The music triggers show what they listen to.
         var whenSound = AddVisualizer(70);
@@ -486,6 +501,9 @@ public sealed partial class MainWindow
             var soundEffect = a == "lighting" && EffectById(EffectId()).Audio;
             palette.Visibility = soundEffect ? Visibility.Visible : Visibility.Collapsed;
             paletteTip.Visibility = palette.Visibility;
+            var splitEffect = a == "lighting" && EffectId() is "sound_beat" or "sound_bass" or "sound_spectrum";
+            split.Visibility = splitEffect ? Visibility.Visible : Visibility.Collapsed;
+            colorCount.Visibility = splitEffect && PaletteId() == "random" ? Visibility.Visible : Visibility.Collapsed;
             paletteTip.Text = SoundPalettes[Math.Max(0, palette.SelectedIndex)].Tip + ".";
             lightSound.Root.Visibility = palette.Visibility;
             lightSound.Polling = soundEffect;
@@ -516,6 +534,7 @@ public sealed partial class MainWindow
         action.SelectionChanged += (_, _) => ShowParts();
         effect.SelectionChanged += (_, _) => ShowParts();
         palette.SelectionChanged += (_, _) => ShowParts();
+        split.SelectionChanged += (_, _) => ShowParts();
         radiusOn.Toggled += (_, _) => ShowParts();
         radius.ValueChanged += (_, _) => ShowParts();
         layerDelay.ValueChanged += (_, _) => ShowParts();
@@ -672,6 +691,8 @@ public sealed partial class MainWindow
                 act["brightness"] = (int)lightBrightness.Value;
                 act["speed"] = (int)lightSpeed.Value;
                 act["palette"] = PaletteId();
+                act["split"] = Splits[Math.Max(0, split.SelectedIndex)].Id;
+                act["colors"] = Math.Max(0, colorCount.SelectedIndex);
                 if (s != "app_running")
                 {
                     // After an event: for this long (fading out at the end), or with no end; around the

@@ -87,6 +87,66 @@ pub enum Effect {
     /// bright ones: teals, greens and gold), calm passages are soft and slow, energetic ones
     /// saturated and quick, and each beat gives a kick (speed = sensitivity).
     MusicFlow,
+    /// Sound reactive: every beat flashes the lights, as bright as the beat is strong, fading at a
+    /// rate set by the speed. Each light (device, zone or LED: [`Split`]) gets its own color.
+    SoundBeat,
+    /// Sound reactive: the lights follow the bass and its hits (kicks, bass notes). Each light
+    /// (device, zone or LED) gets its own color.
+    SoundBass,
+    /// Sound reactive: each light (device, zone or LED) shows one part of the spectrum, bass first,
+    /// as bright as that part is loud.
+    SoundSpectrum,
+}
+
+/// Which lights a sound effect treats as one: what gets its own color (and, for the spectrum, its
+/// own part of it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Split {
+    /// A whole device is one light.
+    Device,
+    /// Each zone of a device (a header, a fan strip, the keyboard...) is one light.
+    #[default]
+    Zone,
+    /// Every LED is a light of its own.
+    Led,
+}
+
+impl Split {
+    pub fn parse(s: &str) -> Option<Split> {
+        serde_json::from_value(serde_json::Value::String(s.into())).ok()
+    }
+}
+
+/// Where an LED is: its place in what is being lit (a device, zone or fan), and which zone and
+/// device it belongs to (for sound effects split by zone or device).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spot {
+    /// LED `i` of `n`.
+    pub i: usize,
+    pub n: usize,
+    /// Zone `zone` of the device's `zones`.
+    pub zone: usize,
+    pub zones: usize,
+    /// Device `device` of `devices` (the devices LightSync lights).
+    pub device: usize,
+    pub devices: usize,
+}
+
+impl Spot {
+    /// LED `i` of `n` on a device of its own, in one zone.
+    pub fn led(i: usize, n: usize) -> Spot {
+        Spot { i, n, zone: 0, zones: 1, device: 0, devices: 1 }
+    }
+
+    /// The light this LED belongs to with this split: (which, of how many).
+    fn unit(&self, split: Split) -> (usize, usize) {
+        match split {
+            Split::Led => (self.i, self.n.max(1)),
+            Split::Zone => (self.zone, self.zones.max(1)),
+            Split::Device => (self.device, self.devices.max(1)),
+        }
+    }
 }
 
 impl Effect {
@@ -108,7 +168,15 @@ impl Effect {
                 | Effect::TrebleSparkle
                 | Effect::BassWave
                 | Effect::MusicFlow
+                | Effect::SoundBeat
+                | Effect::SoundBass
+                | Effect::SoundSpectrum
         )
+    }
+
+    /// The sound effects with lights per device / zone / LED and their own color handling.
+    pub fn is_split(self) -> bool {
+        matches!(self, Effect::SoundBeat | Effect::SoundBass | Effect::SoundSpectrum)
     }
 
     pub fn parse(s: &str) -> Option<Effect> {
@@ -129,6 +197,8 @@ pub enum Palette {
     Random,
     /// By intensity: blue when quiet, through cyan, green and yellow, to red at the loudest.
     ColdHot,
+    /// By pitch: deep red for bass, through orange, green and blue, to violet for treble.
+    LowHigh,
     /// By intensity: deep red when quiet, to orange, yellow and white-hot at the loudest.
     Fire,
     /// Neon pink and cyan along each device, swapping on every beat.
@@ -154,11 +224,15 @@ pub struct LightState {
     pub speed: u8,
     /// Colors of the sound reactive effects (the others ignore it).
     pub palette: Palette,
+    /// Sound effects with lights of their own ([`Effect::is_split`]): what one light is.
+    pub split: Split,
+    /// How many colors the random palette uses (1..=8); 0: a random number on every beat.
+    pub colors: u8,
 }
 
 impl Default for LightState {
     fn default() -> Self {
-        Self { effect: Effect::Static, color: "ffffff".into(), brightness: 100, speed: 50, palette: Palette::Effect }
+        Self { effect: Effect::Static, color: "ffffff".into(), brightness: 100, speed: 50, palette: Palette::Effect, split: Split::Zone, colors: 3 }
     }
 }
 
@@ -351,12 +425,79 @@ fn recolor(c: Color, palette: Palette, heat: f32, audio: &AudioLevels, pos: f32)
             hsv(k as f32 * 0.618_034 + 0.25 * hash(k, 0x5EED) + 0.03 * (pos - 0.5), s, v)
         }
         Palette::ColdHot => hsv(lerp(0.66, 0.0, heat), s, v),
+        // The pitch of the sound: the spectral centroid (where its energy is).
+        Palette::LowHigh => hsv(band_hue(audio.centroid), s, v),
         Palette::Fire => hsv(lerp(0.0, 0.14, heat), s * lerp(1.0, 0.45, heat * heat), v),
         Palette::Neon => {
             let half = (pos * 2.0).min(1.0) as u32;
             hsv(if (half + audio.beat_count).is_multiple_of(2) { 0.92 } else { 0.5 }, s, v)
         }
     }
+}
+
+/// How many colors the random palette uses on this beat: `colors` (1..=8), or 2..=6 picked anew on
+/// every beat when it is 0.
+fn color_count(colors: u8, beat: u32) -> u32 {
+    if colors == 0 {
+        2 + (hash(beat, 0xC010) * 5.0) as u32
+    } else {
+        colors.min(8) as u32
+    }
+}
+
+/// One light of a split sound effect ([`Effect::is_split`]): light `u` of `units` (a device, zone
+/// or LED, see [`Split`]), brightness from the beat, the bass or its part of the spectrum, color from
+/// the palette.
+fn split_light(state: &LightState, spot: &Spot, audio: &AudioLevels, speed: f32) -> Color {
+    let (u, units) = spot.unit(state.split);
+    // The light's place along the spectrum (bass first); a single light shows all of it.
+    let x = if units > 1 { u as f32 / (units - 1) as f32 } else { audio.centroid };
+    let sens = sensitivity(speed);
+    // Brightness (with more contrast than the level itself) and how intense the light is (heat).
+    let (v, heat) = match state.effect {
+        Effect::SoundBeat => {
+            let k = (-audio.beat_age.max(0.0) * lerp(2.0, 12.0, speed)).exp() * audio.beat_strength;
+            let glow = 0.2 * audio.bass_punch * audio.bass_punch;
+            (k.max(glow), k)
+        }
+        Effect::SoundBass => {
+            let b = drive(audio.bass, audio.bass_punch, sens);
+            (b * b, b)
+        }
+        _ => {
+            let b = if units > 1 {
+                band_at(&audio.bands, x)
+            } else {
+                audio.bands.iter().copied().fold(0.0, f32::max)
+            };
+            let b = (b * sens).clamp(0.0, 1.0);
+            (b * b, b)
+        }
+    };
+    let beat = audio.beat_count;
+    let (h, s) = match state.palette {
+        Palette::Effect => {
+            let (h, s, _) = to_hsv(state.base_color());
+            (h, s)
+        }
+        Palette::Random => {
+            // `count` colors spread round the wheel, turned at random on every beat; each light
+            // takes one of them, also anew on every beat.
+            let count = color_count(state.colors, beat);
+            let pick = ((hash(u as u32, beat.wrapping_mul(7919)) * count as f32) as u32).min(count - 1);
+            (hash(beat, 0x5EED) + pick as f32 / count as f32, 1.0)
+        }
+        Palette::Rainbow => (x + 0.05 * audio.phase, 1.0),
+        Palette::ColdHot => (lerp(0.66, 0.0, heat.clamp(0.0, 1.0)), 1.0),
+        // Spectrum: each light by its frequency; beat and bass: by the pitch of the sound.
+        Palette::LowHigh => (band_hue(if state.effect == Effect::SoundSpectrum { x } else { audio.centroid }), 1.0),
+        Palette::Fire => {
+            let heat = heat.clamp(0.0, 1.0);
+            (lerp(0.0, 0.14, heat), lerp(1.0, 0.45, heat * heat))
+        }
+        Palette::Neon => (if (u as u32 + beat).is_multiple_of(2) { 0.92 } else { 0.5 }, 1.0),
+    };
+    hsv(h, s, 0.03 + 0.97 * v)
 }
 
 /// Hue for a position 0..1 along the analyzer bands: red bass through to violet treble.
@@ -406,6 +547,12 @@ pub fn render(state: &LightState, t: f32, i: usize, n: usize) -> Color {
 
 /// Like [`render`], with the audio levels the sound reactive effects follow.
 pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &AudioLevels) -> Color {
+    render_spot(state, t, &Spot::led(i, n), audio)
+}
+
+/// Like [`render_with`], knowing the LED's zone and device too (sound effects split by zone or device).
+pub fn render_spot(state: &LightState, t: f32, spot: &Spot, audio: &AudioLevels) -> Color {
+    let (i, n) = (spot.i, spot.n);
     let speed = state.speed.clamp(1, 100) as f32 / 100.0;
     let pos = if n > 1 { i as f32 / n as f32 } else { 0.0 };
     let base = state.base_color();
@@ -744,6 +891,7 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
             heat = glow.max(wave);
             hsv(h + 0.04 * audio.bass, s, glow.max(wave))
         }
+        Effect::SoundBeat | Effect::SoundBass | Effect::SoundSpectrum => split_light(state, spot, audio, speed),
         Effect::MusicFlow => {
             let sens = sensitivity(speed);
             let energy = (audio.energy * sens).clamp(0.0, 1.0);
@@ -765,7 +913,7 @@ pub fn render_with(state: &LightState, t: f32, i: usize, n: usize, audio: &Audio
             hsv(hue, sat, v * (0.35 + 0.65 * level.max(energy)))
         }
     };
-    let c = if state.effect.is_audio() { recolor(c, state.palette, heat, audio, pos) } else { c };
+    let c = if state.effect.is_audio() && !state.effect.is_split() { recolor(c, state.palette, heat, audio, pos) } else { c };
     mul(c, state.brightness.min(100) as f32 / 100.0)
 }
 
@@ -774,7 +922,7 @@ mod tests {
     use super::*;
 
     fn st(effect: Effect) -> LightState {
-        LightState { effect, color: "ff0000".into(), brightness: 100, speed: 50, palette: Palette::Effect }
+        LightState { effect, color: "ff0000".into(), palette: Palette::Effect, ..LightState::default() }
     }
 
     #[test]
@@ -888,6 +1036,71 @@ mod tests {
         // Beat flash: a soft beat flashes less than a hard one.
         let f = |strength: f32| render_with(&st(Effect::BeatFlash), 0.0, 0, 10, &AudioLevels { beat_age: 0.0, beat_strength: strength, ..AudioLevels::SILENT }).r;
         assert!(f(1.0) == 255 && f(0.55) < 160, "{} {}", f(1.0), f(0.55));
+    }
+
+    #[test]
+    fn beat_bass_and_spectrum_with_lights_per_device_zone_or_led() {
+        let st = |effect, split, palette, colors| LightState { effect, split, palette, colors, color: "ff0000".into(), speed: 34, ..LightState::default() };
+        let at = |s: &LightState, spot: Spot, a: &AudioLevels| render_spot(s, 0.0, &spot, a);
+        let led = |i, n| Spot::led(i, n);
+        let hue = |c: Color| (to_hsv(c).0 * 100.0).round() as i32;
+        // Beat: a flash on the beat, as strong as the beat, gone a second later; dark in silence.
+        let beat = |age: f32, strength: f32| AudioLevels { beat_age: age, beat_strength: strength, beat_count: 5, ..AudioLevels::SILENT };
+        let b = st(Effect::SoundBeat, Split::Led, Palette::Effect, 3);
+        assert_eq!(at(&b, led(0, 10), &beat(0.0, 1.0)), Color::new(255, 0, 0));
+        assert!(bright(at(&b, led(0, 10), &beat(0.0, 0.6))) < 200);
+        assert!(bright(at(&b, led(0, 10), &beat(1.0, 1.0))) < 20);
+        assert!(bright(at(&b, led(0, 10), &AudioLevels::SILENT)) < 10);
+        // Random colors per LED: exactly the number asked for, a new set on the next beat.
+        let r = st(Effect::SoundBeat, Split::Led, Palette::Random, 3);
+        let hues = |a: &AudioLevels| (0..40).map(|i| hue(at(&r, led(i, 40), a))).collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(hues(&beat(0.0, 1.0)).len(), 3, "{:?}", hues(&beat(0.0, 1.0)));
+        let next = AudioLevels { beat_count: 6, ..beat(0.0, 1.0) };
+        assert_ne!(hues(&beat(0.0, 1.0)), hues(&next));
+        // A random number of colors (0): 2 to 6, changing from beat to beat.
+        let any = st(Effect::SoundBeat, Split::Led, Palette::Random, 0);
+        let counts: Vec<usize> = (0..12u32)
+            .map(|k| (0..60).map(|i| hue(at(&any, led(i, 60), &AudioLevels { beat_count: k, ..beat(0.0, 1.0) }))).collect::<std::collections::BTreeSet<_>>().len())
+            .collect();
+        assert!(counts.iter().all(|c| (2..=6).contains(c)) && counts.iter().any(|&c| c != counts[0]), "{counts:?}");
+        // Per zone: one color for a whole zone; per device: one for the device, others differ.
+        let z = st(Effect::SoundBeat, Split::Zone, Palette::Random, 8);
+        let in_zone = |zone: usize, i: usize| at(&z, Spot { zone, zones: 4, ..led(i, 10) }, &beat(0.0, 1.0));
+        assert!((0..10).all(|i| in_zone(1, i) == in_zone(1, 0)));
+        assert!((0..4).any(|k| in_zone(k, 0) != in_zone(0, 0)));
+        let d = st(Effect::SoundBeat, Split::Device, Palette::Random, 8);
+        let on = |device: usize, i: usize, zone: usize| at(&d, Spot { device, devices: 5, zone, zones: 3, ..led(i, 10) }, &beat(0.0, 1.0));
+        assert!((0..10).all(|i| on(2, i, i % 3) == on(2, 0, 0)));
+        assert!((0..5).any(|k| on(k, 0, 0) != on(0, 0, 0)));
+        // Bass: brighter with the bass hits.
+        let bass = st(Effect::SoundBass, Split::Zone, Palette::Effect, 3);
+        let with = |b: f32| bright(at(&bass, led(0, 1), &AudioLevels { bass: b, bass_punch: b, ..AudioLevels::SILENT }));
+        assert!(with(1.0) > 200 && with(0.3) < 60 && with(0.0) < 10, "{} {} {}", with(1.0), with(0.3), with(0.0));
+        // Spectrum per LED: only treble lights the end; low to high colors run red to violet.
+        let sp = st(Effect::SoundSpectrum, Split::Led, Palette::LowHigh, 3);
+        let treble = spectrum(|b| if b >= 18 { 1.0 } else { 0.0 }, 0.0);
+        assert!(bright(at(&sp, led(23, 24), &treble)) > 200 && bright(at(&sp, led(0, 24), &treble)) < 10);
+        let full = spectrum(|_| 1.0, 0.0);
+        let (first, last) = (at(&sp, led(0, 24), &full), at(&sp, led(23, 24), &full));
+        assert!(first.r > 200 && first.b < 30 && last.b > 200, "{first:?} {last:?}");
+        // Spectrum per device: bass on the first device, treble on the last.
+        let spd = st(Effect::SoundSpectrum, Split::Device, Palette::LowHigh, 3);
+        let dev = |k: usize| bright(at(&spd, Spot { device: k, devices: 4, ..led(3, 8) }, &treble));
+        assert!(dev(3) > 200 && dev(0) < 10, "{} {}", dev(0), dev(3));
+        // One light (a single device) shows the whole spectrum: its loudest band.
+        assert!(bright(at(&spd, led(0, 8), &treble)) > 200);
+        // Cold to hot: loud bands red, quiet ones blue.
+        let ch = st(Effect::SoundSpectrum, Split::Led, Palette::ColdHot, 3);
+        let mixed = spectrum(|b| if b < 12 { 1.0 } else { 0.45 }, 0.0);
+        assert!(hue(at(&ch, led(0, 24), &mixed)) < 5 && hue(at(&ch, led(23, 24), &mixed)) > 30);
+        for e in [Effect::SoundBeat, Effect::SoundBass, Effect::SoundSpectrum] {
+            assert!(e.is_audio() && e.is_split());
+            for split in [Split::Device, Split::Zone, Split::Led] {
+                assert!(bright(at(&st(e, split, Palette::Random, 0), led(2, 5), &AudioLevels::SILENT)) < 10, "{e:?} lit in silence");
+            }
+        }
+        assert_eq!(Effect::parse("sound_spectrum"), Some(Effect::SoundSpectrum));
+        assert_eq!(Split::parse("led"), Some(Split::Led));
     }
 
     #[test]

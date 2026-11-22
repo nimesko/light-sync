@@ -20,10 +20,11 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private sealed record EffectOption(string Id, string Name, bool UsesColor, bool Audio = false, string Group = "Calm & solid");
 
-    private const string Calm = "Calm & solid", Motion = "Motion", Colorful = "Colorful & nature", Alerts = "Alerts", Sound = "Sound reactive";
+    private const string Calm = "Calm & solid", Motion = "Motion", Colorful = "Colorful & nature", Alerts = "Alerts", Sound = "Sound reactive",
+        MoreSound = "More sound effects";
 
     /// <summary>Effect families, in the order lists show them.</summary>
-    private static readonly string[] EffectGroups = [Calm, Motion, Colorful, Alerts, Sound];
+    private static readonly string[] EffectGroups = [Calm, Motion, Colorful, Alerts, Sound, MoreSound];
 
     private static readonly EffectOption[] Effects =
     [
@@ -52,16 +53,21 @@ public sealed partial class MainWindow : Window
         new("heartbeat", "Heartbeat", true, Group: Alerts),
         new("strobe", "Strobe", true, Group: Alerts),
         new("police", "Police", false, Group: Alerts),
-        new("sound_pulse", "Sound pulse", true, Audio: true, Group: Sound),
-        new("spectrum_bars", "Spectrum bars", false, Audio: true, Group: Sound),
-        new("beat_flash", "Beat flash", true, Audio: true, Group: Sound),
-        new("spectrum_analyzer", "Spectrum analyzer", false, Audio: true, Group: Sound),
-        new("bass_glow", "Bass glow", true, Audio: true, Group: Sound),
-        new("vu_meter", "VU meter", false, Audio: true, Group: Sound),
-        new("bass_treble", "Bass & treble", false, Audio: true, Group: Sound),
-        new("treble_sparkle", "Treble sparkle", true, Audio: true, Group: Sound),
-        new("bass_wave", "Bass wave", true, Audio: true, Group: Sound),
-        new("music_flow", "Music flow", false, Audio: true, Group: Sound),
+        // The sound effects: beat, bass or spectrum, with lights per device / zone / LED and their colors.
+        new("sound_beat", "Beat", true, Audio: true, Group: Sound),
+        new("sound_bass", "Bass", true, Audio: true, Group: Sound),
+        new("sound_spectrum", "Spectrum", true, Audio: true, Group: Sound),
+        // The classic sound effects (each with its own look).
+        new("sound_pulse", "Sound pulse", true, Audio: true, Group: MoreSound),
+        new("spectrum_bars", "Spectrum bars", false, Audio: true, Group: MoreSound),
+        new("beat_flash", "Beat flash", true, Audio: true, Group: MoreSound),
+        new("spectrum_analyzer", "Spectrum analyzer", false, Audio: true, Group: MoreSound),
+        new("bass_glow", "Bass glow", true, Audio: true, Group: MoreSound),
+        new("vu_meter", "VU meter", false, Audio: true, Group: MoreSound),
+        new("bass_treble", "Bass & treble", false, Audio: true, Group: MoreSound),
+        new("treble_sparkle", "Treble sparkle", true, Audio: true, Group: MoreSound),
+        new("bass_wave", "Bass wave", true, Audio: true, Group: MoreSound),
+        new("music_flow", "Music flow", false, Audio: true, Group: MoreSound),
     ];
     private static EffectOption EffectById(string id) => Effects.FirstOrDefault(e => e.Id == id) ?? Effects[0];
 
@@ -87,6 +93,9 @@ public sealed partial class MainWindow : Window
     private string _effect = "static";
     /// <summary>The sound palette of the selected target (sound effects only): "effect", "random", "cold_hot", "fire" or "neon".</summary>
     private string _palette = "effect";
+    /// <summary>Beat / Bass / Spectrum: what one light is ("device", "zone" or "led") and how many colors random uses (0: random).</summary>
+    private string _split = "zone";
+    private int _colors = 3;
     private Color _color = Color.FromArgb(255, 255, 255, 255);
     private int _deviceCount;
     private bool _exiting;
@@ -225,6 +234,7 @@ public sealed partial class MainWindow : Window
         BuildEffectTiles();
         BuildAnalyzer();
         BuildPaletteTiles();
+        BuildSoundOptions();
         BuildPresets();
         ShowColor();
         ShowEffect();
@@ -531,7 +541,7 @@ public sealed partial class MainWindow : Window
         {
             foreach (var id in TargetIds)
             {
-                await _client.SetStateAsync(id, _effect, Hex, (int)BrightnessSlider.Value, (int)SpeedSlider.Value, _palette);
+                await _client.SetStateAsync(id, _effect, Hex, (int)BrightnessSlider.Value, (int)SpeedSlider.Value, _palette, _split, _colors);
             }
             // A change by hand: the lighting is no longer exactly the preset.
             if (_currentPreset is not null)
@@ -566,6 +576,80 @@ public sealed partial class MainWindow : Window
         }
         ShowColor();
         QueuePush();
+    }
+
+    // ---------- beat / bass / spectrum options ----------
+
+    private readonly Dictionary<string, ToggleButton> _splitButtons = [];
+
+    /// <summary>Lights per device / zone / LED, as shown to the user.</summary>
+    internal static readonly (string Id, string Name, string Tip)[] Splits =
+    [
+        ("device", "Device", "Each device is one light: one color for a whole device"),
+        ("zone", "Zone", "Each zone is one light: a header, a fan strip, the keyboard..."),
+        ("led", "LED", "Every LED is a light of its own"),
+    ];
+
+    /// <summary>The "Lights per" buttons and the "Number of colors" choices (Beat, Bass, Spectrum).</summary>
+    private void BuildSoundOptions()
+    {
+        foreach (var (id, name, tip) in Splits)
+        {
+            var b = new ToggleButton { Content = name, MinWidth = 80 };
+            ToolTipService.SetToolTip(b, tip);
+            var pick = id;
+            b.Click += (_, _) =>
+            {
+                _split = pick;
+                ShowEffect();
+                QueuePush();
+            };
+            _splitButtons[id] = b;
+            SplitButtons.Children.Add(b);
+        }
+        ColorCountBox.ItemsSource = ColorCountNames;
+    }
+
+    /// <summary>"Random" (a new number on every beat), then 1 to 8 colors.</summary>
+    internal static readonly List<string> ColorCountNames = ["Random number", .. Enumerable.Range(1, 8).Select(n => n == 1 ? "1 color" : $"{n} colors")];
+
+    private void ColorCount_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingColorCount || ColorCountBox.SelectedIndex < 0)
+        {
+            return;
+        }
+        _colors = ColorCountBox.SelectedIndex; // index 0 = random, n = n colors
+        QueuePush();
+    }
+
+    private bool _syncingColorCount;
+
+    private void ShowSoundOptions(EffectOption effect)
+    {
+        var split = effect.Id is "sound_beat" or "sound_bass" or "sound_spectrum";
+        SoundOptions.Visibility = split ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var (id, b) in _splitButtons)
+        {
+            b.IsChecked = id == _split;
+        }
+        SplitHint.Text = (effect.Id, _split) switch
+        {
+            ("sound_spectrum", "device") => "The spectrum is spread over your devices: bass on the first, treble on the last.",
+            ("sound_spectrum", "zone") => "The spectrum is spread over each device's zones: bass on the first zone, treble on the last.",
+            ("sound_spectrum", _) => "The spectrum runs along each device's LEDs: bass at the start, treble at the end.",
+            (_, "device") => "Each device gets its own color.",
+            (_, "zone") => "Each zone (a header, a fan strip, the keyboard...) gets its own color.",
+            _ => "Every LED gets its own color.",
+        };
+        ColorCountPanel.Visibility = split && _palette == "random" ? Visibility.Visible : Visibility.Collapsed;
+        _syncingColorCount = true;
+        ColorCountBox.SelectedIndex = Math.Clamp(_colors, 0, 8);
+        _syncingColorCount = false;
+        if (effect.Group == MoreSound)
+        {
+            MoreSoundExpander.IsExpanded = true;
+        }
     }
 
     // ---------- sound palettes ----------
@@ -624,6 +708,7 @@ public sealed partial class MainWindow : Window
         "rainbow" => HueBrush(1),
         "random" => Gradient([.. Enumerable.Range(0, 6).Select(k => SoundVisualizer.Hue(k * 0.618034))]),
         "cold_hot" => Gradient([.. Enumerable.Range(0, 5).Select(k => SoundVisualizer.PaletteColor("cold_hot", k / 4.0, 0, 0))]),
+        "low_high" => Gradient([.. Enumerable.Range(0, 5).Select(k => SoundVisualizer.Hue(0.78 * k / 4.0))]),
         "fire" => Gradient([Color.FromArgb(255, 90, 0, 0), .. Enumerable.Range(0, 4).Select(k => SoundVisualizer.PaletteColor("fire", k / 3.0, 0, 0))]),
         "neon" => Gradient([SoundVisualizer.Hue(0.92), SoundVisualizer.Hue(0.92), SoundVisualizer.Hue(0.5), SoundVisualizer.Hue(0.5)]),
         _ => new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)),
@@ -869,6 +954,8 @@ public sealed partial class MainWindow : Window
             BrightnessSlider.Value = s.Brightness;
             SpeedSlider.Value = s.Speed;
             _palette = SoundPalettes.Any(p => p.Id == s.Palette) ? s.Palette : "effect";
+            _split = s.Split is "device" or "zone" or "led" ? s.Split : "zone";
+            _colors = Math.Clamp(s.Colors, 0, 8);
             SyncPicker();
             ShowColor();
             ShowEffect();
@@ -1987,7 +2074,7 @@ public sealed partial class MainWindow : Window
     {
         // Non-sound effects in their families, each under a small title.
         var groupPanels = new Dictionary<string, Panel>();
-        foreach (var group in EffectGroups.Where(g => g != Sound))
+        foreach (var group in EffectGroups.Where(g => g is not (Sound or MoreSound)))
         {
             EffectTiles.Children.Add(new TextBlock
             {
@@ -2023,7 +2110,8 @@ public sealed partial class MainWindow : Window
             };
             button.Click += (_, _) => SetEffect(effect.Id);
             _effectButtons[effect.Id] = button;
-            (effect.Audio ? SoundTiles : groupPanels.GetValueOrDefault(effect.Group) ?? groupPanels[Calm]).Children.Add(button);
+            Panel tiles = effect.Group == Sound ? SoundTiles : effect.Group == MoreSound ? MoreSoundTiles : groupPanels.GetValueOrDefault(effect.Group) ?? groupPanels[Calm];
+            tiles.Children.Add(button);
         }
     }
 
@@ -2115,6 +2203,9 @@ public sealed partial class MainWindow : Window
         "treble_sparkle" => Gradient(Stops(Dim(c, 0.15), c, Dim(c, 0.1), Dim(c, 0.2), Color.FromArgb(255, 255, 255, 255), Dim(c, 0.15), c, Dim(c, 0.1))),
         "bass_wave" => Gradient(Stops(Dim(c, 0.05), c, Dim(c, 0.15), Dim(c, 0.05), Dim(c, 0.15), c, Dim(c, 0.05))),
         "music_flow" => Gradient(Stops(Color.FromArgb(255, 120, 20, 200), Color.FromArgb(255, 230, 30, 90), Color.FromArgb(255, 255, 170, 30), Color.FromArgb(255, 40, 210, 170), Color.FromArgb(255, 120, 20, 200))),
+        "sound_beat" => Gradient(Stops(c, Dim(c, 0.35), Dim(c, 0.08), Dim(c, 0.04), c, Dim(c, 0.25), Dim(c, 0.05))),
+        "sound_bass" => Gradient(Stops(Dim(c, 0.2), c, Dim(c, 0.5), Dim(c, 0.2), Dim(c, 0.7), c, Dim(c, 0.25))),
+        "sound_spectrum" => HueBrush(1),
         "plasma" => Gradient(Stops(Color.FromArgb(255, 255, 0, 170), Color.FromArgb(255, 120, 0, 255), Color.FromArgb(255, 0, 200, 255), Color.FromArgb(255, 0, 255, 120), Color.FromArgb(255, 255, 220, 0), Color.FromArgb(255, 255, 0, 170))),
         "meteor_shower" => Gradient(Stops(Dim(c, 0.03), Dim(c, 0.1), Dim(c, 0.4), c, Color.FromArgb(255, 255, 255, 255), Dim(c, 0.03), Dim(c, 0.2), c, Dim(c, 0.03))),
         "lava_lamp" => Gradient(Stops(Dim(ShiftHue(c, -0.03), 0.15), ShiftHue(c, 0.03), Dim(c, 0.3), Dim(ShiftHue(c, -0.03), 0.12), ShiftHue(c, 0.03), Dim(c, 0.2))),
@@ -2202,6 +2293,7 @@ public sealed partial class MainWindow : Window
         Presets.Opacity = effect.UsesColor && !palette ? 1 : 0.5;
         PalettePanel.Visibility = effect.Audio ? Visibility.Visible : Visibility.Collapsed;
         ShowPalette();
+        ShowSoundOptions(effect);
         SpeedPanel.Visibility = _effect == "static" ? Visibility.Collapsed : Visibility.Visible;
         // For sound effects the slider sets how strongly they react.
         SpeedLabel.Text = effect.Audio ? "Sensitivity" : "Speed";

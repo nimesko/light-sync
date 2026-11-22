@@ -329,6 +329,7 @@ pub fn validate(mut t: Trigger, scene: &Scene) -> Result<Trigger> {
             state.color = color_of(&state.color)?;
             state.brightness = state.brightness.min(100);
             state.speed = state.speed.clamp(1, 100);
+            state.colors = state.colors.min(8);
             if app {
                 // Shown for as long as the app runs, over the whole targets.
                 *duration_ms = None;
@@ -1061,6 +1062,7 @@ mod tests {
             ],
             hidden: false,
             led_map: Default::default(),
+            slot: (0, 1),
         }
     }
 
@@ -1080,6 +1082,7 @@ mod tests {
                 names: keys.iter().map(|k| format!("Key: {k}")).collect(),
                 pos: (0..9).map(|i| Some(((i % 3) as f32, (i / 3) as f32))).collect(),
             },
+            slot: (0, 1),
         }
     }
 

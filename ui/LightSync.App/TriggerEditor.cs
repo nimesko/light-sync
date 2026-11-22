@@ -266,7 +266,9 @@ public sealed partial class MainWindow
             siteNote.Text = siteBox.Text.Trim().Length == 0
                 ? "Empty: any page. With a site, only while a window of this browser shows a page on it (its current tab)."
                 : host.Length == 0 ? "That isn't a web site's address: type its host, like youtube.com."
-                : $"Only while a window of this browser shows a page on {host} (or a part of it, like music.{host}).";
+                : host.Count(c => c == '.') == 1
+                    ? $"Only while a window of this browser shows a page on {host} or one of its subdomains (like m.{host})."
+                    : $"Only while a window of this browser shows a page on {host} or one of its subdomains.";
         }
         siteBox.TextChanged += (_, _) => ShowSite();
         var appPicker = BuildAppPicker(appExe, exe =>

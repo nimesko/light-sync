@@ -1052,7 +1052,8 @@ public sealed partial class MainWindow : Window
                 },
             },
         };
-        GroupInfo? saved = null;
+        // Set by the dialog's Save handler (a box: the handler runs while the dialog is open).
+        var saved = new System.Runtime.CompilerServices.StrongBox<GroupInfo?>();
         dialog.PrimaryButtonClick += async (_, args) =>
         {
             var deferral = args.GetDeferral();
@@ -1069,7 +1070,7 @@ public sealed partial class MainWindow : Window
                     args.Cancel = true;
                     return;
                 }
-                saved = await _client.SaveGroupAsync(group?.Id, name.Text.Trim(), picked);
+                saved.Value = await _client.SaveGroupAsync(group?.Id, name.Text.Trim(), picked);
             }
             catch (Exception ex) when (Errors.Expected(ex))
             {
@@ -1082,10 +1083,10 @@ public sealed partial class MainWindow : Window
                 deferral.Complete();
             }
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary && saved is not null)
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary && saved.Value is { } savedGroup)
         {
             await LoadGroupsAsync();
-            await SelectAsync(TargetItem.ForGroup(saved));
+            await SelectAsync(TargetItem.ForGroup(savedGroup));
         }
     }
 
@@ -1195,7 +1196,8 @@ public sealed partial class MainWindow : Window
                 },
             },
         };
-        List<DeviceInfo>? devices = null;
+        // Set by the dialog's Apply handler (a box: the handler runs while the dialog is open).
+        var devices = new System.Runtime.CompilerServices.StrongBox<List<DeviceInfo>?>();
         dialog.PrimaryButtonClick += async (_, args) =>
         {
             var deferral = args.GetDeferral();
@@ -1217,7 +1219,7 @@ public sealed partial class MainWindow : Window
                     args.Cancel = true;
                     return;
                 }
-                devices = await _client.SetLayoutAsync(zone.Id, f, f == 0 ? 0 : p);
+                devices.Value = await _client.SetLayoutAsync(zone.Id, f, f == 0 ? 0 : p);
             }
             catch (Exception ex) when (Errors.Expected(ex))
             {
@@ -1230,9 +1232,9 @@ public sealed partial class MainWindow : Window
                 deferral.Complete();
             }
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary && devices is not null)
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary && devices.Value is { } newDevices)
         {
-            ShowDevices(devices);
+            ShowDevices(newDevices);
             if (selectAfter && _targets.FirstOrDefault(t => t.Id == zone.Id) is { } z)
             {
                 await SelectAsync(z);

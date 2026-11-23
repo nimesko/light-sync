@@ -21,7 +21,7 @@ use std::time::Duration;
 /// A trigger fires at most this often.
 pub const MIN_GAP: Duration = Duration::from_millis(50);
 /// At most this many instances are shown at once (the oldest go first).
-pub const MAX_ACTIVE: usize = 32;
+pub const MAX_ACTIVE: usize = 128;
 /// At most this many triggers can be saved.
 pub const MAX_TRIGGERS: usize = 64;
 /// Mouse movement is reported a lot: events closer together than this are ignored.
@@ -219,9 +219,46 @@ pub enum Action {
         duration_ms: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radius: Option<f32>,
+        /// A different lighting per device (zone, fan, group or LED): each shows on its own target,
+        /// over `state`, which keeps any of the trigger's targets that have none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        per_target: Vec<TargetLighting>,
     },
     /// Load a saved profile.
     Preset { name: String },
+}
+
+/// One target's own lighting in a `lighting` action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TargetLighting {
+    pub target: String,
+    #[serde(flatten)]
+    pub state: LightState,
+}
+
+/// The most targets with their own lighting in one trigger.
+const MAX_PER_TARGET: usize = 64;
+
+/// What a trigger's `lighting` action paints: (expanded targets, lighting), bottom first. Its own
+/// lighting on the targets without one of their own (all of them, if none has), then each target's.
+fn lightings(action: &Action, targets: &[String], scene: &Scene) -> Vec<(Vec<String>, LightState)> {
+    let Action::Lighting { state, per_target, .. } = action else {
+        return vec![];
+    };
+    let expand = |ids: &[String]| ids.iter().flat_map(|id| scene.expand(id)).collect::<Vec<_>>();
+    let mut out = vec![];
+    if per_target.is_empty() || targets.is_empty() {
+        out.push((expand(targets), state.clone()));
+    } else {
+        let rest: Vec<String> = targets.iter().filter(|id| !per_target.iter().any(|p| p.target == **id)).cloned().collect();
+        if !rest.is_empty() {
+            out.push((expand(&rest), state.clone()));
+        }
+    }
+    for p in per_target {
+        out.push((scene.expand(&p.target), p.state.clone()));
+    }
+    out
 }
 
 fn yes() -> bool {
@@ -284,6 +321,32 @@ pub struct Trigger {
     /// Device / zone / fan ids or "group:<id>"; empty means every device that is not hidden.
     #[serde(default)]
     pub targets: Vec<String>,
+    /// More effects it plays at the same time, each on its own targets, over the one above (so
+    /// with no targets above, these devices show their own effect and the rest show `action`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<Part>,
+}
+
+/// One more effect of a trigger, on its own targets (empty: every device that is not hidden).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Part {
+    pub action: Action,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    /// The same effect as the one before it, for devices with their own settings ("lights per",
+    /// sound colors): only the app uses it, to show them as one effect.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub with_previous: bool,
+}
+
+/// The most effects one trigger plays besides its own.
+pub const MAX_PARTS: usize = 16;
+
+impl Trigger {
+    /// Its effects with their targets, bottom first: its own, then each in `also`.
+    fn units(&self) -> impl Iterator<Item = (&Action, &[String])> {
+        std::iter::once((&self.action, self.targets.as_slice())).chain(self.also.iter().map(|p| (&p.action, p.targets.as_slice())))
+    }
 }
 
 fn color_of(s: &str) -> Result<String> {
@@ -387,13 +450,37 @@ pub fn validate(mut t: Trigger, scene: &Scene) -> Result<Trigger> {
         }
         _ => {}
     }
-    // An app trigger shows lighting while the app runs (no duration); any other trigger can play
-    // any effect for a while.
+    // An app trigger shows its lighting while the app runs (no duration) and plays its other
+    // effects when the app starts; any other trigger plays its effects when it fires.
     let app = matches!(t.source, Source::AppRunning { .. });
-    if app && !matches!(t.action, Action::Lighting { .. }) {
-        bail!("an 'app_running' trigger takes a 'lighting' action");
+    check_action(&mut t.action, app, scene)?;
+    t.targets = check_targets(&t.targets, scene)?;
+    if t.also.len() > MAX_PARTS {
+        bail!("a trigger plays at most {} effects", MAX_PARTS + 1);
     }
-    match &mut t.action {
+    for p in t.also.iter_mut() {
+        check_action(&mut p.action, app, scene)?;
+        p.targets = check_targets(&p.targets, scene)?;
+    }
+    Ok(t)
+}
+
+/// Check one of a trigger's effects and normalise it (lowercase colors, one entry per target).
+fn check_action(action: &mut Action, app: bool, scene: &Scene) -> Result<()> {
+    if app {
+        // Nothing happened at a place: an app's effects light their whole targets.
+        match action {
+            Action::Flash { radius, layer_delay_ms, .. }
+            | Action::Pulse { radius, layer_delay_ms, .. }
+            | Action::Ripple { radius, layer_delay_ms, .. }
+            | Action::FadeIn { radius, layer_delay_ms, .. } => {
+                *radius = None;
+                *layer_delay_ms = None;
+            }
+            _ => {}
+        }
+    }
+    match action {
         Action::Flash { color, duration_ms, radius, layer_delay_ms, .. }
         | Action::Ripple { color, duration_ms, radius, layer_delay_ms, .. }
         | Action::FadeIn { color, duration_ms, radius, layer_delay_ms, .. } => {
@@ -407,11 +494,30 @@ pub fn validate(mut t: Trigger, scene: &Scene) -> Result<Trigger> {
             radius_of(*radius)?;
             layer_delay_of(*layer_delay_ms)?;
         }
-        Action::Lighting { state, duration_ms, radius } => {
-            state.color = color_of(&state.color)?;
-            state.brightness = state.brightness.min(100);
-            state.speed = state.speed.clamp(1, 100);
-            state.colors = state.colors.min(8);
+        Action::Lighting { state, duration_ms, radius, per_target } => {
+            let check = |state: &mut LightState| -> Result<()> {
+                state.color = color_of(&state.color)?;
+                state.brightness = state.brightness.min(100);
+                state.speed = state.speed.clamp(1, 100);
+                state.colors = state.colors.min(8);
+                Ok(())
+            };
+            check(state)?;
+            if per_target.len() > MAX_PER_TARGET {
+                bail!("at most {MAX_PER_TARGET} targets can have their own lighting");
+            }
+            for p in per_target.iter_mut() {
+                p.target = p.target.trim().to_string();
+                if p.target.is_empty() || p.target.len() > 256 {
+                    bail!("each 'per_target' entry needs a 'target' (a device, zone, fan, group or LED id)");
+                }
+                check(&mut p.state)?;
+            }
+            // One entry per target (the last one wins).
+            let mut seen = std::collections::HashSet::new();
+            let mut kept: Vec<TargetLighting> = per_target.drain(..).rev().filter(|p| seen.insert(p.target.clone())).collect();
+            kept.reverse();
+            *per_target = kept;
             if app {
                 // Shown for as long as the app runs, over the whole targets.
                 *duration_ms = None;
@@ -431,11 +537,16 @@ pub fn validate(mut t: Trigger, scene: &Scene) -> Result<Trigger> {
             }
         }
     }
-    if t.targets.len() > 256 {
+    Ok(())
+}
+
+/// Check an effect's targets: trimmed, known groups, no duplicates.
+fn check_targets(ids: &[String], scene: &Scene) -> Result<Vec<String>> {
+    if ids.len() > 256 {
         bail!("too many targets");
     }
     let mut targets: Vec<String> = vec![];
-    for id in &t.targets {
+    for id in ids {
         let id = id.trim();
         if id.is_empty() || id == "all" {
             bail!("targets must be device, zone or fan ids or \"group:<id>\" (an empty list means all devices)");
@@ -449,8 +560,7 @@ pub fn validate(mut t: Trigger, scene: &Scene) -> Result<Trigger> {
             targets.push(id.to_string());
         }
     }
-    t.targets = targets;
-    Ok(t)
+    Ok(targets)
 }
 
 /// The next free trigger id ("t1", "t2"...).
@@ -487,7 +597,7 @@ pub fn input_wanted(scene: &Scene) -> InputWanted {
         match &t.source {
             Source::Key { .. } => {
                 w.keys = true;
-                w.key_codes |= t.action.radius().is_some();
+                w.key_codes |= t.units().any(|(a, _)| a.radius().is_some());
             }
             Source::MouseClick { .. } => w.mouse_click = true,
             Source::MouseMove => w.mouse_move = true,
@@ -508,7 +618,10 @@ pub fn input_wanted(scene: &Scene) -> InputWanted {
 /// sound effect).
 pub fn uses_audio(scene: &Scene) -> bool {
     scene.triggers.iter().any(|t| {
-        t.enabled && (t.source.is_audio() || matches!(&t.action, Action::Lighting { state, .. } if state.effect.is_audio()))
+        t.enabled
+            && (t.source.is_audio()
+                || t.units().any(|(a, _)| matches!(a, Action::Lighting { state, per_target, .. }
+                    if state.effect.is_audio() || per_target.iter().any(|p| p.state.effect.is_audio()))))
     })
 }
 
@@ -534,6 +647,8 @@ enum Kind {
 #[derive(Debug, Clone)]
 struct Instance {
     trigger: String,
+    /// Which of the trigger's effects (0: its own, then `also`).
+    part: usize,
     kind: Kind,
     color: Color,
     start: Duration,
@@ -658,6 +773,29 @@ impl Engine {
         changed
     }
 
+    /// The watched programs running now.
+    pub fn running_apps(&self) -> &[String] {
+        &self.apps
+    }
+
+    /// Play the effects (other than lighting, which shows while the app runs) of the app triggers
+    /// whose apps started: none of them ran in `before`, one runs now.
+    pub fn apps_started(&mut self, scene: &Scene, before: &[String], now: Duration) -> Fired {
+        let mut f = Fired::default();
+        if scene.off {
+            return f;
+        }
+        for t in scene.triggers.iter().filter(|t| t.enabled) {
+            if let Source::AppRunning { app, site, apps } = &t.source {
+                let keys = watch_keys(app, site.as_deref(), apps);
+                if keys.iter().any(|k| self.apps.contains(k)) && !keys.iter().any(|k| before.contains(k)) {
+                    self.fire(scene, t, now, &mut f, None);
+                }
+            }
+        }
+        f
+    }
+
     /// Forget everything live (after a reset, or the lights going off). Which apps run is kept.
     pub fn clear(&mut self) {
         let apps = std::mem::take(&mut self.apps);
@@ -732,63 +870,77 @@ impl Engine {
         }
         self.last_fire.insert(t.id.clone(), now);
         f.count += 1;
-        let (kind, color, ms) = match &t.action {
+        let app = matches!(t.source, Source::AppRunning { .. });
+        for (part, (action, targets)) in t.units().enumerate() {
+            self.fire_one(scene, &t.id, part, action, targets, app, now, f, origin);
+        }
+        if self.active.len() > MAX_ACTIVE {
+            let extra = self.active.len() - MAX_ACTIVE;
+            self.active.drain(..extra);
+        }
+    }
+
+    /// Play one of a trigger's effects (`part`) on its targets.
+    #[allow(clippy::too_many_arguments)]
+    fn fire_one(&mut self, scene: &Scene, id: &str, part: usize, action: &Action, targets: &[String], app: bool, now: Duration, f: &mut Fired, origin: Option<Input>) {
+        let (kind, color, ms) = match action {
             Action::Preset { name } => {
                 f.preset = Some(name.clone());
                 return;
             }
             // An app's lighting shows while the app runs (see `overlay`), it isn't fired.
-            Action::Lighting { .. } if matches!(t.source, Source::AppRunning { .. }) => return,
+            Action::Lighting { .. } if app => return,
             Action::Lighting { duration_ms, .. } => (Kind::Effect, "000000", duration_ms.unwrap_or(0)),
             Action::Flash { color, duration_ms, .. } => (Kind::Flash, color.as_str(), *duration_ms),
             Action::Pulse { duration_ms, .. } => (Kind::Pulse, "000000", *duration_ms),
             Action::Ripple { color, duration_ms, .. } => (Kind::Ripple, color.as_str(), *duration_ms),
             Action::FadeIn { color, duration_ms, .. } => (Kind::FadeIn, color.as_str(), *duration_ms),
         };
-        let radius = t.action.radius();
+        let radius = action.radius();
         let mut level = 1.0;
-        // A persistent effect (no duration): one per trigger (per key / wheel for a local one); firing
+        let same = |i: &Instance| i.trigger == id && i.part == part && (radius.is_none() || i.origin == origin);
+        // A persistent effect (no duration): one per effect (per key / wheel for a local one); firing
         // again just starts it over there.
         let persistent = kind == Kind::Effect && ms == 0;
         if persistent {
-            self.active.retain(|i| !(i.trigger == t.id && (radius.is_none() || i.origin == origin)));
+            self.active.retain(|i| !same(i));
         }
         if kind == Kind::FadeIn {
-            // One glow per trigger (per key, for a glow round the pressed key): each event builds
+            // One glow per effect (per key, for a glow round the pressed key): each event builds
             // on what is still showing.
-            if let Some(k) = self.active.iter().position(|i| i.trigger == t.id && (radius.is_none() || i.origin == origin)) {
+            if let Some(k) = self.active.iter().position(same) {
                 let old = self.active.remove(k);
                 level = (old.strength(now) + FADE_STEP).min(1.0);
             } else {
                 level = FADE_STEP;
             }
         }
-        let targets = t.targets.iter().flat_map(|id| scene.expand(id)).collect();
         self.fires = self.fires.wrapping_add(1);
-        let color = if t.action.random() {
+        let color = if action.random() {
             random_color(self.fires ^ now.as_nanos() as u64)
         } else {
             color.parse().unwrap_or(Color::new(255, 255, 255))
         };
-        self.active.push(Instance {
-            trigger: t.id.clone(),
-            kind,
-            color,
-            start: now,
-            duration: if persistent { f32::INFINITY } else { ms.max(1) as f32 / 1000.0 },
-            level,
-            targets,
-            origin,
-            radius,
-            delay: if radius.is_some() { t.action.layer_delay() } else { 0.0 },
-            state: match &t.action {
-                Action::Lighting { state, .. } => Some(state.clone()),
-                _ => None,
-            },
-        });
-        if self.active.len() > MAX_ACTIVE {
-            let extra = self.active.len() - MAX_ACTIVE;
-            self.active.drain(..extra);
+        // A lighting action can show a different effect per target: one instance each.
+        let pieces: Vec<(Vec<String>, Option<LightState>)> = match action {
+            Action::Lighting { .. } => lightings(action, targets, scene).into_iter().map(|(targets, s)| (targets, Some(s))).collect(),
+            _ => vec![(targets.iter().flat_map(|id| scene.expand(id)).collect(), None)],
+        };
+        for (targets, state) in pieces {
+            self.active.push(Instance {
+                trigger: id.to_string(),
+                part,
+                kind,
+                color,
+                start: now,
+                duration: if persistent { f32::INFINITY } else { ms.max(1) as f32 / 1000.0 },
+                level,
+                targets,
+                origin,
+                radius,
+                delay: if radius.is_some() { action.layer_delay() } else { 0.0 },
+                state,
+            });
         }
     }
 
@@ -801,15 +953,14 @@ impl Engine {
         let mut items: Vec<Item> = vec![];
         if !scene.off {
             for (k, t) in scene.triggers.iter().enumerate().filter(|(_, t)| t.enabled) {
-                if let (Source::AppRunning { app, site, apps }, Action::Lighting { state, .. }) = (&t.source, &t.action) {
-                    // Any one of the apps (or sites) it watches.
+                if let Source::AppRunning { app, site, apps } = &t.source {
+                    // Any one of the apps (or sites) it watches: its lighting effects, bottom first.
                     if watch_keys(app, site.as_deref(), apps).iter().any(|k| self.apps.contains(k)) {
-                        items.push(Item {
-                            lighting: Some(state.clone()),
-                            targets: t.targets.iter().flat_map(|id| scene.expand(id)).collect(),
-                            rank: k,
-                            ..Item::default()
-                        });
+                        for (action, targets) in t.units() {
+                            for (targets, state) in lightings(action, targets, scene) {
+                                items.push(Item { lighting: Some(state), targets, rank: k, ..Item::default() });
+                            }
+                        }
                     }
                 }
             }
@@ -1221,8 +1372,9 @@ mod tests {
         let app = |id: &str, color: &str| trig(json!({"id":id,"name":format!("game {id}"),"source":{"kind":"app_running","app":"C:\\Games\\Game.EXE"},"action":{"kind":"lighting","effect":"static","color":color,"brightness":100,"speed":50}}));
         let ok = validate(app("", "00FF00"), &Scene::default()).unwrap();
         assert_eq!(ok.source, Source::AppRunning { app: "game.exe".into(), site: None, apps: vec![] });
-        // An app condition only with lighting (lighting itself goes with any trigger).
-        assert!(validate(trig(json!({"name":"x","source":{"kind":"app_running","app":"a.exe"},"action":{"kind":"pulse","duration_ms":200}})), &Scene::default()).is_err());
+        // Any effect goes with an app (it plays when the app starts); it lights its whole targets.
+        let pulse = validate(trig(json!({"name":"x","source":{"kind":"app_running","app":"a.exe"},"action":{"kind":"pulse","duration_ms":200,"radius":2}})), &Scene::default()).unwrap();
+        assert_eq!(pulse.action.radius(), None);
         let mut s = scene_with(vec![validate(app("t1", "00ff00"), &Scene::default()).unwrap(), validate(app("t2", "0000ff"), &Scene::default()).unwrap()]);
         assert_eq!(input_wanted(&s).apps, ["game.exe"]);
         let mut e = Engine::default();
@@ -1246,6 +1398,88 @@ mod tests {
         assert_eq!(paint(&mut e, &s), Color::new(255, 0, 0));
         assert!(e.set_apps(vec![]));
         assert!(!e.set_apps(vec![]));
+    }
+
+    #[test]
+    fn one_trigger_any_effects_on_their_own_devices() {
+        // Red static on every device, a green flash on A on top; an app's flash plays when it starts.
+        let t = validate(
+            trig(json!({"id":"t1","name":"mix","source":{"kind":"mouse_move"},"targets":[],
+                "action":{"kind":"lighting","effect":"static","color":"FF0000","brightness":100,"speed":50,"duration_ms":1000},
+                "also":[{"targets":["openrgb:Strip/A"],"action":{"kind":"flash","color":"00ff00","duration_ms":1000}}]})),
+            &Scene::default(),
+        )
+        .unwrap();
+        assert_eq!(t.also.len(), 1);
+        assert!(!t.also[0].with_previous);
+        // "with_previous" (the app's grouping) is kept as saved.
+        let grouped: Part = serde_json::from_value(json!({"action":{"kind":"pulse","duration_ms":200},"targets":["d"],"with_previous":true})).unwrap();
+        assert!(grouped.with_previous);
+        assert_eq!(serde_json::to_value(&grouped).unwrap()["with_previous"], json!(true));
+        let s = scene_with(vec![t]);
+        let mut e = Engine::default();
+        e.input(&s, Input::Move, ms(0));
+        let mut frame = vec![Color::BLACK; 4];
+        e.overlay(&s, ms(1), &AudioLevels::SILENT).apply(&dev(4), &s, &mut frame);
+        assert!(frame[0].g > 200 && frame[0].r < 60, "A flashes green: {:?}", frame[0]);
+        assert_eq!(frame[3], Color::new(255, 0, 0), "the rest is red");
+
+        let app = validate(
+            trig(json!({"id":"t2","name":"game","source":{"kind":"app_running","app":"game.exe"},
+                "action":{"kind":"flash","color":"0000ff","duration_ms":1000}})),
+            &Scene::default(),
+        )
+        .unwrap();
+        let s = scene_with(vec![app]);
+        let mut e = Engine::default();
+        let before = e.running_apps().to_vec();
+        assert!(e.set_apps(vec!["game.exe".into()]));
+        assert_eq!(e.apps_started(&s, &before, ms(0)).count, 1);
+        // Still running: no new flash.
+        let before = e.running_apps().to_vec();
+        assert_eq!(e.apps_started(&s, &before, ms(500)).count, 0);
+        let mut frame = vec![Color::BLACK; 4];
+        e.overlay(&s, ms(1), &AudioLevels::SILENT).apply(&dev(4), &s, &mut frame);
+        assert!(frame[0].b > 200, "flash on start: {:?}", frame[0]);
+    }
+
+    #[test]
+    fn one_trigger_a_different_effect_per_device() {
+        // Targets A and B (zones standing in for two devices); red for any without its own.
+        let t = |targets: serde_json::Value, per_target: serde_json::Value| {
+            validate(
+                trig(json!({"id":"t1","name":"split","source":{"kind":"mouse_move"},"targets":targets,
+                    "action":{"kind":"lighting","effect":"static","color":"FF0000","brightness":100,"speed":50,"per_target":per_target}})),
+                &Scene::default(),
+            )
+            .unwrap()
+        };
+        let paint = |trigger: Trigger| {
+            let s = scene_with(vec![trigger]);
+            let mut e = Engine::default();
+            e.input(&s, Input::Move, ms(0));
+            let mut frame = vec![Color::BLACK; 4];
+            e.overlay(&s, ms(10), &AudioLevels::SILENT).apply(&dev(4), &s, &mut frame);
+            frame
+        };
+        let (red, green, blue) = (Color::new(255, 0, 0), Color::new(0, 255, 0), Color::new(0, 0, 255));
+        let ab = json!(["openrgb:Strip/A", "openrgb:Strip/B"]);
+        let a_green = json!({"target":"openrgb:Strip/A","effect":"static","color":"00ff00","brightness":100,"speed":50});
+        let b_blue = json!({"target":"openrgb:Strip/B","effect":"static","color":"0000ff","brightness":100,"speed":50});
+        // Each its own: A green, B blue.
+        assert_eq!(paint(t(ab.clone(), json!([a_green, b_blue]))), [green, green, blue, blue]);
+        // Only A has its own: B keeps the trigger's red.
+        assert_eq!(paint(t(ab.clone(), json!([a_green]))), [green, green, red, red]);
+        // "All devices": red everywhere, A's own on top.
+        assert_eq!(paint(t(json!([]), json!([a_green]))), [green, green, red, red]);
+        // Bad entries are refused; one entry per target (the last wins).
+        let bad = trig(json!({"name":"x","source":{"kind":"mouse_move"},"action":{"kind":"lighting","effect":"static","color":"ff0000","per_target":[{"target":"","effect":"static"}]}}));
+        assert!(validate(bad, &Scene::default()).is_err());
+        let twice = t(ab.clone(), json!([a_green, {"target":"openrgb:Strip/A","effect":"static","color":"0000ff"}]));
+        assert!(matches!(&twice.action, Action::Lighting { per_target, .. } if per_target.len() == 1 && per_target[0].state.color == "0000ff"));
+        // A sound effect on one device's own lighting turns sound capture on.
+        let sound = t(ab, json!([{"target":"openrgb:Strip/A","effect":"sound_beat"}]));
+        assert!(uses_audio(&scene_with(vec![sound])));
     }
 
     #[test]
@@ -1527,7 +1761,7 @@ mod tests {
         assert!(e.overlay_at(ms(5000)).is_empty());
         assert!(!e.is_active());
         // At most MAX_ACTIVE instances.
-        for k in 0..100 {
+        for k in 0..200 {
             e.input(&s, Input::Key(Some(65)), ms(10_000 + k * 60));
         }
         assert_eq!(e.active.len(), MAX_ACTIVE);

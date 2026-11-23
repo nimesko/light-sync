@@ -243,7 +243,7 @@ impl Scene {
             .groups
             .iter_mut()
             .flat_map(|g| g.members.iter_mut())
-            .chain(self.triggers.iter_mut().flat_map(|t| t.targets.iter_mut()));
+            .chain(self.triggers.iter_mut().flat_map(|t| t.targets.iter_mut().chain(t.also.iter_mut().flat_map(|p| p.targets.iter_mut()))));
         for m in members {
             if *m == old || m.starts_with(&child) {
                 *m = format!("{new}{}", &m[old.len()..]);

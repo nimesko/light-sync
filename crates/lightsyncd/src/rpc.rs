@@ -755,8 +755,12 @@ impl<L: Lights> Daemon<L> {
                     .filter_map(Value::as_str)
                     .map(String::from)
                     .collect();
+                let before = self.triggers.running_apps().to_vec();
                 if self.triggers.set_apps(apps) {
                     self.dirty = true;
+                    // Apps that just started play their triggers' effects (a flash, a preset...).
+                    let fired = self.triggers.apps_started(&self.scene, &before, self.now);
+                    self.run_preset(fired.preset);
                 }
                 Ok(json!(true))
             }

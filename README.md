@@ -17,10 +17,11 @@ else; it has only been tested on that one PC.
 | All devices in one list | Devices, zones and fans together; hide what you don't use; split fan headers into single fans; groups |
 | 3D preview | A live 3D model of the case and desk in the current colors; drag parts to where they really are |
 | 28 effects | Calm, motion, colorful and alert effects, and Beat, Bass and Spectrum for sound, each with color, brightness and speed |
-| Music sync | Lights per device, zone or LED; follows what Windows is playing (spectrum, bass, treble, beat, tempo, mood), even at a low volume; kicks, claps and hi-hats hit even in loud electronic music |
+| Music sync | Lights per device (the device acts as one LED) or per LED; follows what Windows is playing (spectrum, bass, treble, beat, tempo, mood), even at a low volume; kicks, claps and hi-hats hit even in loud electronic music |
 | What's playing | A live spectrum of what it hears, and which app is playing it: the song, and for a browser the site (YouTube, YouTube Music, Spotify...) |
 | Sound colors | One color, random (a set number of colors or a random number on every beat), cold to hot, low to high, rainbow, fire or neon |
-| Triggers | A key press, a mouse click, the beat, one or more apps running or web sites open in a browser (like youtube.com, any of them) can light whole devices, some zones or single keys and LEDs, with priorities |
+| Triggers | A key press, a mouse click or movement, or one or more apps running or web sites open in a browser (like youtube.com, any of them) can play any mix of effects: a flash, pulse, ripple or glow, any of the 28 effects, or a preset, each on its own devices (whole devices or single keys and LEDs) or on all the others; priorities set from the list |
+| Trigger builder | Each trigger is built on a map: what sets it off, its effects and the devices each one lights; click a box to change it. A device can have its own sound settings ("lights per", colors), else it uses the effect's |
 | Presets | Save and load your lighting setups |
 | Power | Lights off on sleep, lock or when idle; start with Windows; lives in the tray |
 | OpenRGB management | Starts, stops and updates OpenRGB for you, listening on this PC only |
@@ -71,6 +72,11 @@ for a browser, the name of the tab that plays, only while a sound view is open a
 sent. A trigger that watches a web site reads the host of the page each window of that browser shows
 (nothing else of the address), and only tells the service whether the watched site is open. The only
 online request is the check for new OpenRGB versions.
+
+## Contributing
+
+Issues and small pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), including the
+privacy rules every change keeps, and the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

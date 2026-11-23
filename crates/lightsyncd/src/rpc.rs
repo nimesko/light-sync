@@ -9,7 +9,7 @@
 //!   effects: see effects.rs (snake_case names, e.g. static, breathing, rainbow_wave, heartbeat);
 //!   sound reactive: sound_beat, sound_bass, sound_spectrum (sound is captured only while one of
 //!   them is visible; their `speed` is sensitivity, or how fast the beat fades); they take `split`
-//!   (device, zone or led: what one light is), `palette` (effect = the chosen color, rainbow,
+//!   (device: the device acts as one LED, or led: each LED on its own), `palette` (effect = the chosen color, rainbow,
 //!   random, cold_hot, low_high, fire, neon) and `colors` (how many the random palette uses, 1..8,
 //!   0 = a random number on every beat). Older sound effect names are read as the closest of these.
 //! - `groups` -> `[Group]`; `save_group { id?, name, members }` -> Group; `delete_group { id }`
@@ -198,20 +198,19 @@ pub fn device_frame(scene: &Scene, d: &DeviceInfo, t: f32, audio: &AudioLevels) 
     }
     let mut frame = Vec::with_capacity(n);
     let (device, devices) = d.slot;
-    let zones = d.zones.len().max(1);
-    for (zone, z) in d.zones.iter().enumerate() {
+    for z in &d.zones {
         let len = z.leds as usize;
         let offset = frame.len();
         for j in 0..len.min(n.saturating_sub(offset)) {
             let p = scene.pick(&d.id, &z.id, j, len, offset, n);
-            let spot = Spot { i: p.pos, n: p.len, zone, zones, device, devices };
+            let spot = Spot { i: p.pos, n: p.len, device, devices };
             frame.push(effects::render_spot(p.state, t, &spot, audio));
         }
     }
     // LEDs outside any zone (should not happen) follow the device.
     while frame.len() < n {
         let i = frame.len();
-        let spot = Spot { i, n, zone: 0, zones, device, devices };
+        let spot = Spot { i, n, device, devices };
         frame.push(effects::render_spot(scene.effective(&d.id), t, &spot, audio));
     }
     frame
@@ -546,7 +545,7 @@ impl<L: Lights> Daemon<L> {
             let name = v
                 .as_str()
                 .ok_or_else(|| anyhow!("'split' must be a string"))?;
-            next.split = Split::parse(name).ok_or_else(|| anyhow!("unknown split '{name}' (device, zone or led)"))?;
+            next.split = Split::parse(name).ok_or_else(|| anyhow!("unknown split '{name}' (device or led)"))?;
         }
         if let Some(v) = p.get("colors") {
             next.colors = v
@@ -1352,15 +1351,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sound_lights_per_zone_and_random_colors() {
+    async fn sound_lights_per_device_and_random_colors() {
         let mut d = Daemon::new(Fake::default(), None);
-        let r = call(&mut d, r#"{"id":1,"method":"set_state","params":{"effect":"sound_beat","palette":"random","split":"zone","colors":0}}"#).await;
-        assert_eq!((r["result"]["split"].clone(), r["result"]["colors"].clone()), (json!("zone"), json!(0)));
+        let r = call(&mut d, r#"{"id":1,"method":"set_state","params":{"effect":"sound_beat","palette":"random","split":"device","colors":0}}"#).await;
+        assert_eq!((r["result"]["split"].clone(), r["result"]["colors"].clone()), (json!("device"), json!(0)));
         for bad in [r#"{"split":"room"}"#, r#"{"colors":9}"#, r#"{"colors":"two"}"#] {
             let req = format!(r#"{{"id":2,"method":"set_state","params":{bad}}}"#);
             assert!(call(&mut d, &req).await["error"].is_object(), "{bad}");
         }
-        // On a beat, every LED of a zone shares its zone's color.
+        // On a beat, every LED of the device shares one color (the device acts as one LED).
         let beat = AudioLevels { beat: true, beat_age: 0.0, beat_strength: 1.0, beat_count: 3, ..AudioLevels::SILENT };
         let dev = board();
         let frame = device_frame(&d.scene, &dev, 1.0, &beat);

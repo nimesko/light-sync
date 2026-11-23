@@ -81,8 +81,8 @@ public sealed partial class MainWindow : Window
     private string _effect = "static";
     /// <summary>The sound palette of the selected target (sound effects only): "effect", "random", "cold_hot", "fire" or "neon".</summary>
     private string _palette = "effect";
-    /// <summary>Beat / Bass / Spectrum: what one light is ("device", "zone" or "led") and how many colors random uses (0: random).</summary>
-    private string _split = "zone";
+    /// <summary>Beat / Bass / Spectrum: what one light is ("device" or "led") and how many colors random uses (0: random).</summary>
+    private string _split = "device";
     private int _colors = 3;
     private Color _color = Color.FromArgb(255, 255, 255, 255);
     private int _deviceCount;
@@ -573,9 +573,8 @@ public sealed partial class MainWindow : Window
     /// <summary>Lights per device / zone / LED, as shown to the user.</summary>
     internal static readonly (string Id, string Name, string Tip)[] Splits =
     [
-        ("device", "Device", "Each device is one light: one color for a whole device"),
-        ("zone", "Zone", "Each zone is one light: a header, a fan strip, the keyboard..."),
-        ("led", "LED", "Every LED is a light of its own"),
+        ("device", "Device", "Each device acts as one LED: one color for the whole device"),
+        ("led", "LED", "Every LED of every device on its own"),
     ];
 
     /// <summary>The "Lights per" buttons and the "Number of colors" choices (Beat, Bass, Spectrum).</summary>
@@ -624,11 +623,9 @@ public sealed partial class MainWindow : Window
         SplitHint.Text = (effect.Id, _split) switch
         {
             ("sound_spectrum", "device") => "The spectrum is spread over your devices: bass on the first, treble on the last.",
-            ("sound_spectrum", "zone") => "The spectrum is spread over each device's zones: bass on the first zone, treble on the last.",
             ("sound_spectrum", _) => "The spectrum runs along each device's LEDs: bass at the start, treble at the end.",
-            (_, "device") => "Each device gets its own color.",
-            (_, "zone") => "Each zone (a header, a fan strip, the keyboard...) gets its own color.",
-            _ => "Every LED gets its own color.",
+            (_, "device") => "Each device acts as one LED: the whole device shows one color.",
+            _ => "Every LED of every device is handled on its own: its own color and brightness.",
         };
         ColorCountPanel.Visibility = split && _palette == "random" ? Visibility.Visible : Visibility.Collapsed;
         _syncingColorCount = true;
@@ -938,7 +935,7 @@ public sealed partial class MainWindow : Window
             BrightnessSlider.Value = s.Brightness;
             SpeedSlider.Value = s.Speed;
             _palette = SoundPalettes.Any(p => p.Id == s.Palette) ? s.Palette : "effect";
-            _split = s.Split is "device" or "zone" or "led" ? s.Split : "zone";
+            _split = s.Split == "led" ? "led" : "device";
             _colors = Math.Clamp(s.Colors, 0, 8);
             SyncPicker();
             ShowColor();

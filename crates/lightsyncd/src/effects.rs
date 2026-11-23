@@ -77,12 +77,12 @@ pub enum Effect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Split {
-    /// A whole device is one light.
-    Device,
-    /// Each zone of a device (a header, a fan strip, the keyboard...) is one light.
+    /// A whole device is one light, as if it had a single LED. ("zone", from an earlier version,
+    /// reads as this.)
     #[default]
-    Zone,
-    /// Every LED is a light of its own.
+    #[serde(alias = "zone")]
+    Device,
+    /// Every LED of every device is a light of its own.
     Led,
 }
 
@@ -92,32 +92,28 @@ impl Split {
     }
 }
 
-/// Where an LED is: its place in what is being lit (a device, zone or fan), and which zone and
-/// device it belongs to (for sound effects split by zone or device).
+/// Where an LED is: its place in what is being lit (a device, zone or fan), and which device it
+/// belongs to (for sound effects with a light per device).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Spot {
     /// LED `i` of `n`.
     pub i: usize,
     pub n: usize,
-    /// Zone `zone` of the device's `zones`.
-    pub zone: usize,
-    pub zones: usize,
     /// Device `device` of `devices` (the devices LightSync lights).
     pub device: usize,
     pub devices: usize,
 }
 
 impl Spot {
-    /// LED `i` of `n` on a device of its own, in one zone.
+    /// LED `i` of `n` on a device of its own.
     pub fn led(i: usize, n: usize) -> Spot {
-        Spot { i, n, zone: 0, zones: 1, device: 0, devices: 1 }
+        Spot { i, n, device: 0, devices: 1 }
     }
 
     /// The light this LED belongs to with this split: (which, of how many).
     fn unit(&self, split: Split) -> (usize, usize) {
         match split {
             Split::Led => (self.i, self.n.max(1)),
-            Split::Zone => (self.zone, self.zones.max(1)),
             Split::Device => (self.device, self.devices.max(1)),
         }
     }
@@ -195,7 +191,7 @@ pub struct LightState {
 
 impl Default for LightState {
     fn default() -> Self {
-        Self { effect: Effect::Static, color: "ffffff".into(), brightness: 100, speed: 50, palette: Palette::Effect, split: Split::Zone, colors: 3 }
+        Self { effect: Effect::Static, color: "ffffff".into(), brightness: 100, speed: 50, palette: Palette::Effect, split: Split::Device, colors: 3 }
     }
 }
 
@@ -796,17 +792,16 @@ mod tests {
             .map(|k| (0..60).map(|i| hue(at(&any, led(i, 60), &AudioLevels { beat_count: k, ..beat(0.0, 1.0) }))).collect::<std::collections::BTreeSet<_>>().len())
             .collect();
         assert!(counts.iter().all(|c| (2..=6).contains(c)) && counts.iter().any(|&c| c != counts[0]), "{counts:?}");
-        // Per zone: one color for a whole zone; per device: one for the device, others differ.
-        let z = st(Effect::SoundBeat, Split::Zone, Palette::Random, 8);
-        let in_zone = |zone: usize, i: usize| at(&z, Spot { zone, zones: 4, ..led(i, 10) }, &beat(0.0, 1.0));
-        assert!((0..10).all(|i| in_zone(1, i) == in_zone(1, 0)));
-        assert!((0..4).any(|k| in_zone(k, 0) != in_zone(0, 0)));
+        // Per device: the device acts as one LED (all its LEDs one color); other devices differ.
         let d = st(Effect::SoundBeat, Split::Device, Palette::Random, 8);
-        let on = |device: usize, i: usize, zone: usize| at(&d, Spot { device, devices: 5, zone, zones: 3, ..led(i, 10) }, &beat(0.0, 1.0));
-        assert!((0..10).all(|i| on(2, i, i % 3) == on(2, 0, 0)));
-        assert!((0..5).any(|k| on(k, 0, 0) != on(0, 0, 0)));
+        let on = |device: usize, i: usize| at(&d, Spot { device, devices: 5, ..led(i, 10) }, &beat(0.0, 1.0));
+        assert!((0..10).all(|i| on(2, i) == on(2, 0)));
+        assert!((0..5).any(|k| on(k, 0) != on(0, 0)));
+        // "zone" from an earlier version reads as per device; per device is the default.
+        assert_eq!(Split::parse("zone"), Some(Split::Device));
+        assert_eq!(LightState::default().split, Split::Device);
         // Bass: brighter with the bass hits.
-        let bass = st(Effect::SoundBass, Split::Zone, Palette::Effect, 3);
+        let bass = st(Effect::SoundBass, Split::Device, Palette::Effect, 3);
         let with = |b: f32| bright(at(&bass, led(0, 1), &AudioLevels { bass: b, bass_punch: b, ..AudioLevels::SILENT }));
         assert!(with(1.0) > 200 && with(0.3) < 60 && with(0.0) < 10, "{} {} {}", with(1.0), with(0.3), with(0.0));
         // Spectrum per LED: only treble lights the end; low to high colors run red to violet.
@@ -828,7 +823,7 @@ mod tests {
         assert!(hue(at(&ch, led(0, 24), &mixed)) < 5 && hue(at(&ch, led(23, 24), &mixed)) > 30);
         for e in [Effect::SoundBeat, Effect::SoundBass, Effect::SoundSpectrum] {
             assert!(e.is_audio());
-            for split in [Split::Device, Split::Zone, Split::Led] {
+            for split in [Split::Device, Split::Led] {
                 assert!(bright(at(&st(e, split, Palette::Random, 0), led(2, 5), &AudioLevels::SILENT)) < 10, "{e:?} lit in silence");
             }
         }

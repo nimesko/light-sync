@@ -116,6 +116,8 @@ public sealed class TriggerInfo
     public JsonObject Source { get; set; } = new() { ["kind"] = "key", ["keys"] = "any" };
     public JsonObject Action { get; set; } = new() { ["kind"] = "flash", ["color"] = "FFFFFF", ["duration_ms"] = 300 };
     public List<string> Targets { get; set; } = [];
+    /// <summary>More effects it plays at once, each {action, targets}, over the one above.</summary>
+    public JsonArray Also { get; set; } = [];
 
     public string SourceKind => Source["kind"]?.GetValue<string>() ?? "";
     public string ActionKind => Action["kind"]?.GetValue<string>() ?? "";
@@ -134,6 +136,7 @@ public sealed class TriggerInfo
             Source = o["source"] is JsonObject s ? (JsonObject)s.DeepClone() : new JsonObject { ["kind"] = "key", ["keys"] = "any" },
             Action = o["action"] is JsonObject a ? (JsonObject)a.DeepClone() : new JsonObject { ["kind"] = "flash", ["color"] = "FFFFFF", ["duration_ms"] = 300 },
             Targets = o["targets"] is JsonArray t ? t.Select(x => x?.ToString()).OfType<string>().ToList() : [],
+            Also = o["also"] is JsonArray more ? (JsonArray)more.DeepClone() : [],
         };
     }
 
@@ -149,6 +152,10 @@ public sealed class TriggerInfo
         o["source"] = Source.DeepClone();
         o["action"] = Action.DeepClone();
         o["targets"] = new JsonArray(Targets.Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+        if (Also.Count > 0)
+        {
+            o["also"] = Also.DeepClone();
+        }
         return o;
     }
 }

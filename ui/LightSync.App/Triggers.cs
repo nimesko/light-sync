@@ -471,7 +471,7 @@ public sealed partial class MainWindow
         });
         var titles = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 2 };
         titles.Children.Add(new TextBlock { Text = _editingNew ? "New trigger" : TriggerName(t), Style = (Style)Application.Current.Resources["SubtitleTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis });
-        titles.Children.Add(new TextBlock { Text = _editingNew ? "Pick what sets it off, which lights it uses, and what they do." : Describe(t), Style = caption, Foreground = secondary, TextWrapping = TextWrapping.Wrap });
+        titles.Children.Add(new TextBlock { Text = _editingNew ? "Name it, pick what sets it off, then an effect and the devices that show it." : Describe(t), Style = caption, Foreground = secondary, TextWrapping = TextWrapping.Wrap });
         if (!_editingNew)
         {
             Border Chip(string text, string bg, string fg) => new()
@@ -705,7 +705,13 @@ public sealed partial class MainWindow
         var targets = t.Targets.Count == 0
             ? "all devices"
             : t.Targets.Count <= 2 ? string.Join(" and ", t.Targets.Select(NameOf)) : $"{t.Targets.Count} devices and zones";
-        return $"When {DescribeSource(t.Source).ToLowerInvariant()}: {DescribeAction(t.Action).ToLowerInvariant()} on {targets}."
+        var more = t.Also.Count switch
+        {
+            0 => "",
+            1 => ", and 1 more effect on other devices",
+            var n => $", and {n} more effects on other devices",
+        };
+        return $"When {DescribeSource(t.Source).ToLowerInvariant()}: {DescribeAction(t.Action).ToLowerInvariant()} on {targets}{more}."
             + (t.Enabled ? "" : " (off)");
     }
 
@@ -762,6 +768,8 @@ public sealed partial class MainWindow
             "ripple" => $"Ripple{color}{ms}",
             "fade_in" => $"Fade in{color}{ms}",
             "preset" => $"Load the preset \"{a["name"]}\"",
+            "lighting" when a["per_target"] is JsonArray { Count: > 0 } => (a["duration_ms"] is null ? "Show " : "Play ")
+                + $"{Effects.FirstOrDefault(e => e.Id == a["effect"]?.ToString())?.Name ?? "an effect"}{color}, other effects on some devices{ms}",
             "lighting" => a["duration_ms"] is null ? $"Show {Effects.FirstOrDefault(e => e.Id == a["effect"]?.ToString())?.Name ?? "lighting"}{color}" : $"Play {Effects.FirstOrDefault(e => e.Id == a["effect"]?.ToString())?.Name ?? "an effect"}{color}{ms}",
             var k => $"\"{k}\"",
         };

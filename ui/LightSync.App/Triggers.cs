@@ -373,8 +373,17 @@ public sealed partial class MainWindow
                 VerticalAlignment = VerticalAlignment.Center,
             };
             ToolTipService.SetToolTip(rank, "Priority: where triggers light the same LEDs, the higher one (lower number) wins");
-            Grid.SetColumn(rank, 2);
-            row.Children.Add(rank);
+            // Move it up or down the list (its priority) right here.
+            var index = _triggers.IndexOf(t);
+            var up = PriorityButton("", $"Move \"{TriggerName(t)}\" up (higher priority)", index > 0);
+            var down = PriorityButton("", $"Move \"{TriggerName(t)}\" down (lower priority)", index < _triggers.Count - 1);
+            var trigger = t;
+            up.Click += (_, _) => Safe("moving a trigger", () => MoveInListAsync(trigger, index - 1));
+            down.Click += (_, _) => Safe("moving a trigger", () => MoveInListAsync(trigger, index + 1));
+            var priority = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center, Children = { rank, up, down } };
+            rank.Margin = new Thickness(0, 0, 4, 0);
+            Grid.SetColumn(priority, 2);
+            row.Children.Add(priority);
             row.Children.Add(new Border
             {
                 Width = 22,
@@ -585,6 +594,48 @@ public sealed partial class MainWindow
         Grid.SetColumn(note, 1);
         privacy.Children.Add(note);
         TriggerPane.Children.Add(privacy);
+    }
+
+    /// <summary>A small up / down arrow for a row of the trigger list.</summary>
+    private static Button PriorityButton(string glyph, string label, bool enabled)
+    {
+        var b = new Button
+        {
+            Content = new FontIcon { Glyph = glyph, FontSize = 10 },
+            Padding = new Thickness(4),
+            MinWidth = 0,
+            MinHeight = 0,
+            Width = 24,
+            Height = 24,
+            IsEnabled = enabled,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+        };
+        ToolTipService.SetToolTip(b, label);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, label);
+        return b;
+    }
+
+    /// <summary>
+    /// Move a trigger from the list's arrows. Whatever is open stays open as it is (an edit in progress
+    /// is not reloaded), and the list shows the new order.
+    /// </summary>
+    private async Task MoveInListAsync(TriggerInfo t, int to)
+    {
+        if (string.IsNullOrEmpty(t.Id) || to < 0 || to >= _triggers.Count)
+        {
+            return;
+        }
+        try
+        {
+            await _client.MoveTriggerAsync(t.Id, to);
+        }
+        catch (Exception e) when (Errors.Expected(e))
+        {
+            ShowNotice(InfoBarSeverity.Error, "Could not change the priority", Explain(e));
+            return;
+        }
+        await LoadTriggersAsync();
     }
 
     /// <summary>Move a trigger in the list (its priority) and keep it open.</summary>

@@ -194,13 +194,10 @@ pub struct Daemon<L> {
 /// The scene file is written at most this often.
 const SAVE_GAP: Duration = Duration::from_secs(1);
 
-/// Whether anything visible uses a sound reactive effect, or an enabled trigger listens to sound
-/// (only then is sound captured).
+/// Whether the scene's own lighting uses a sound reactive effect (triggers: see
+/// [`Engine::needs_audio`]).
 pub fn uses_audio(scene: &Scene) -> bool {
-    !scene.off
-        && (scene.default.effect.is_audio()
-            || scene.overrides.values().any(|s| s.effect.is_audio())
-            || triggers::uses_audio(scene))
+    !scene.off && (scene.default.effect.is_audio() || scene.overrides.values().any(|s| s.effect.is_audio()))
 }
 
 /// [`device_frame`] with the triggers' overlay painted on top.
@@ -290,9 +287,10 @@ impl<L: Lights> Daemon<L> {
         self
     }
 
-    /// Whether the render loop should run at the faster audio frame rate.
+    /// Whether sound is needed now (only then is it captured, and the render loop runs at the
+    /// faster audio frame rate): a sound effect in the lighting, or a trigger that needs it now.
     pub fn uses_audio(&self) -> bool {
-        uses_audio(&self.scene)
+        uses_audio(&self.scene) || self.triggers.needs_audio(&self.scene)
     }
 
     /// Whether the render loop should run at the faster frame rate (sound, or triggers showing).

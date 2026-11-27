@@ -614,14 +614,11 @@ pub fn input_wanted(scene: &Scene) -> InputWanted {
     w
 }
 
-/// Whether any enabled trigger listens to sound (a sound trigger, or an app's lighting with a
-/// sound effect).
-pub fn uses_audio(scene: &Scene) -> bool {
-    scene.triggers.iter().any(|t| {
-        t.enabled
-            && (t.source.is_audio()
-                || t.units().any(|(a, _)| matches!(a, Action::Lighting { state, per_target, .. }
-                    if state.effect.is_audio() || per_target.iter().any(|p| p.state.effect.is_audio()))))
+/// Whether a lighting effect of the trigger reacts to sound.
+fn lights_with_sound(t: &Trigger) -> bool {
+    t.units().any(|(a, _)| {
+        matches!(a, Action::Lighting { state, per_target, .. }
+            if state.effect.is_audio() || per_target.iter().any(|p| p.state.effect.is_audio()))
     })
 }
 
@@ -772,6 +769,21 @@ impl Engine {
         let changed = apps != self.apps;
         self.apps = apps;
         changed
+    }
+
+    /// Whether the triggers need sound right now: a sound trigger is on, or a sound effect is
+    /// showing (the lighting of an app that runs, or an effect playing after an event). An app
+    /// trigger with a sound effect doesn't listen while its app isn't running.
+    pub fn needs_audio(&self, scene: &Scene) -> bool {
+        if scene.off {
+            return false;
+        }
+        let running = |t: &Trigger| match &t.source {
+            Source::AppRunning { app, site, apps } => watch_keys(app, site.as_deref(), apps).iter().any(|k| self.apps.contains(k)),
+            _ => false,
+        };
+        scene.triggers.iter().filter(|t| t.enabled).any(|t| t.source.is_audio() || (running(t) && lights_with_sound(t)))
+            || self.active.iter().any(|i| i.state.as_ref().is_some_and(|s| s.effect.is_audio()))
     }
 
     /// The watched programs running now.
@@ -1587,9 +1599,13 @@ mod tests {
         assert!(validate(bad, &Scene::default()).is_err());
         let twice = t(ab.clone(), json!([a_green, {"target":"openrgb:Strip/A","effect":"static","color":"0000ff"}]));
         assert!(matches!(&twice.action, Action::Lighting { per_target, .. } if per_target.len() == 1 && per_target[0].state.color == "0000ff"));
-        // A sound effect on one device's own lighting turns sound capture on.
+        // A sound effect on one device's own lighting turns sound capture on while it shows.
         let sound = t(ab, json!([{"target":"openrgb:Strip/A","effect":"sound_beat"}]));
-        assert!(uses_audio(&scene_with(vec![sound])));
+        let s = scene_with(vec![sound]);
+        let mut e = Engine::default();
+        assert!(!e.needs_audio(&s), "not before it plays");
+        e.input(&s, Input::Move, ms(0));
+        assert!(e.needs_audio(&s), "while it plays");
     }
 
     #[test]
@@ -1882,8 +1898,8 @@ mod tests {
         let beat = trig(json!({"id":"t1","name":"b","source":{"kind":"audio_beat"},"action":{"kind":"flash","color":"ffffff","duration_ms":100}}));
         let bass = trig(json!({"id":"t2","name":"l","source":{"kind":"audio_level","band":"bass","above":0.5},"action":{"kind":"pulse","duration_ms":100}}));
         let s = scene_with(vec![beat, bass]);
-        assert!(uses_audio(&s) && !uses_audio(&Scene::default()));
         let mut e = Engine::default();
+        assert!(e.needs_audio(&s) && !e.needs_audio(&Scene::default()));
         let silent = AudioLevels::SILENT;
         let kick = AudioLevels { beat: true, beat_age: 0.01, ..silent };
         assert_eq!(e.audio(&s, &silent, ms(0)).count, 0);

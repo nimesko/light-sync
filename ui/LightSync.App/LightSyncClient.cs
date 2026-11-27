@@ -252,6 +252,14 @@ public sealed class LightSyncClient
     public async Task<List<string>> ProfileAsync(string action, string name) =>
         (await CallAsync($"{action}_profile", new { name }))?.Deserialize<List<string>>(Json) ?? [];
 
+    /// <summary>The presets as a file holds them: { lightsync_presets: 1, presets: { name: lighting } } (all of them without <paramref name="names"/>).</summary>
+    public async Task<JsonObject> ExportProfilesAsync(IEnumerable<string>? names = null) =>
+        await CallAsync("export_profiles", names is null ? null : new { names = names.ToList() }) as JsonObject ?? [];
+
+    /// <summary>Add the presets of a file (<c>presets</c> of an export); taken names get " (2)"... unless <paramref name="replace"/>. Returns the names given to them.</summary>
+    public async Task<List<string>> ImportProfilesAsync(JsonObject presets, bool replace) =>
+        (await CallAsync("import_profiles", new JsonObject { ["presets"] = presets.DeepClone(), ["replace"] = replace }))?["imported"]?.Deserialize<List<string>>(Json) ?? [];
+
     /// <summary>Back to default lighting with no per-device settings, groups or fan layouts.</summary>
     public Task ResetAsync(bool profiles) => CallAsync("reset", new { profiles });
 

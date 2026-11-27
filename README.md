@@ -22,7 +22,7 @@ else; it has only been tested on that one PC.
 | Sound colors | One color, random (a set number of colors or a random number on every beat), cold to hot, low to high, rainbow, fire or neon |
 | Triggers | A key press, a mouse click or movement, or one or more apps running or web sites open in a browser (like youtube.com, any of them) can play any mix of effects: a flash, pulse, ripple or glow, any of the 35 effects, or a preset, each on its own devices (whole devices or single keys and LEDs) or on all the others; priorities set from the list |
 | Trigger builder | Each trigger is built on a map: what sets it off, its effects and the devices each one lights; click a box to change it. A device can have its own sound settings ("lights per", colors), else it uses the effect's |
-| Presets | Save and load your lighting setups |
+| Presets | Save and load your lighting setups; export them to a file and import them on another PC |
 | Power | Lights off on sleep, lock or when idle; start with Windows; lives in the tray |
 | OpenRGB management | Starts, stops and updates OpenRGB for you, listening on this PC only; Windows asks for administrator rights once (when installing), not on every start |
 

@@ -1457,6 +1457,13 @@ public sealed partial class MainWindow : Window
         {
             ProfilesMenu.Items.Add(new MenuFlyoutItem { Text = "No presets yet", IsEnabled = false });
         }
+        ProfilesMenu.Items.Add(new MenuFlyoutSeparator());
+        var import = new MenuFlyoutItem { Text = "Import presets...", Icon = new FontIcon { Glyph = "\uE8B5" } };
+        import.Click += (_, _) => Safe("importing presets", ImportProfilesAsync);
+        ProfilesMenu.Items.Add(import);
+        var export = new MenuFlyoutItem { Text = "Export presets...", Icon = new FontIcon { Glyph = "\uEDE1" }, IsEnabled = _profiles.Count > 0 };
+        export.Click += (_, _) => Safe("exporting presets", ExportProfilesAsync);
+        ProfilesMenu.Items.Add(export);
 
         BuildTrayMenu();
     }
@@ -1504,7 +1511,7 @@ public sealed partial class MainWindow : Window
 
     private async Task SaveProfileAsync()
     {
-        var name = new TextBox { Header = "Name", PlaceholderText = "For example: Gaming, Night, Work" };
+        var name = new TextBox { Header = "Name", PlaceholderText = "For example: Gaming, Night, Work", MaxLength = 64 };
         var note = new TextBlock
         {
             TextWrapping = TextWrapping.Wrap,
@@ -1541,6 +1548,152 @@ public sealed partial class MainWindow : Window
         catch (Exception e) when (Errors.Expected(e))
         {
             ShowNotice(InfoBarSeverity.Error, "Could not save the preset", Explain(e));
+        }
+    }
+
+    /// <summary>The biggest presets file read (the service takes requests up to 1 MB).</summary>
+    private const long MaxPresetsFile = 900 * 1024;
+
+    /// <summary>
+    /// Save presets to a file (all, or the ones ticked): their colors and effects, and the ids of the
+    /// devices, zones and fans they set (which name the hardware, like "openrgb:Razer ..."); nothing else.
+    /// </summary>
+    private async Task ExportProfilesAsync()
+    {
+        if (_profiles.Count == 0)
+        {
+            return;
+        }
+        var boxes = _profiles.Select(n => new CheckBox { Content = n, IsChecked = true }).ToList();
+        var list = new StackPanel { Spacing = 2 };
+        boxes.ForEach(b => list.Children.Add(b));
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Export presets",
+            PrimaryButtonText = "Export...",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            Content = new StackPanel
+            {
+                Spacing = 12,
+                MinWidth = 360,
+                Children =
+                {
+                    new ScrollViewer { Content = list, MaxHeight = 300 },
+                    new TextBlock
+                    {
+                        TextWrapping = TextWrapping.Wrap,
+                        Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+                        Foreground = Res("TextFillColorSecondaryBrush"),
+                        Text = "The file holds these presets' colors and effects, and the names of the devices they set (like your keyboard's model). Nothing else is in it.",
+                    },
+                },
+            },
+        };
+        foreach (var b in boxes)
+        {
+            b.Checked += (_, _) => dialog.IsPrimaryButtonEnabled = true;
+            b.Unchecked += (_, _) => dialog.IsPrimaryButtonEnabled = boxes.Any(x => x.IsChecked == true);
+        }
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+        var names = boxes.Where(b => b.IsChecked == true).Select(b => (string)b.Content).ToList();
+        var picker = new Windows.Storage.Pickers.FileSavePicker
+        {
+            SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary,
+            SuggestedFileName = names.Count == 1 ? $"LightSync preset - {names[0]}" : "LightSync presets",
+        };
+        picker.FileTypeChoices.Add("LightSync presets", [".json"]);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var file = await picker.PickSaveFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+        try
+        {
+            var data = await _client.ExportProfilesAsync(names);
+            var text = data.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            await Windows.Storage.FileIO.WriteTextAsync(file, text);
+            ShowNotice(InfoBarSeverity.Success, names.Count == 1 ? $"Exported \"{names[0]}\"" : $"Exported {names.Count} presets", file.Name);
+        }
+        catch (Exception e) when (Errors.Expected(e))
+        {
+            ShowNotice(InfoBarSeverity.Error, "Could not export the presets", Explain(e));
+        }
+    }
+
+    /// <summary>Add the presets of a file exported from LightSync (checked by the service before any is kept).</summary>
+    private async Task ImportProfilesAsync()
+    {
+        var picker = new Windows.Storage.Pickers.FileOpenPicker { SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary };
+        picker.FileTypeFilter.Add(".json");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var file = await picker.PickSingleFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+        System.Text.Json.Nodes.JsonObject presets;
+        try
+        {
+            var props = await file.GetBasicPropertiesAsync();
+            if (props.Size > MaxPresetsFile)
+            {
+                ShowNotice(InfoBarSeverity.Error, "Could not import the presets", "That file is too big for a presets file.");
+                return;
+            }
+            var root = System.Text.Json.Nodes.JsonNode.Parse(await Windows.Storage.FileIO.ReadTextAsync(file)) as System.Text.Json.Nodes.JsonObject;
+            if (root?["presets"] is not System.Text.Json.Nodes.JsonObject p || p.Count == 0)
+            {
+                ShowNotice(InfoBarSeverity.Error, "Could not import the presets", "That isn't a LightSync presets file (File > Presets > Export presets makes one).");
+                return;
+            }
+            presets = p;
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException || Errors.Expected(e))
+        {
+            ShowNotice(InfoBarSeverity.Error, "Could not import the presets", "That file couldn't be read as a LightSync presets file.");
+            return;
+        }
+        // Names already in use: keep both (the imported one gets a number) or replace.
+        var taken = presets.Select(kv => kv.Key.Trim()).Where(_profiles.Contains).ToList();
+        var replace = false;
+        if (taken.Count > 0)
+        {
+            var ask = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Some presets have the same name",
+                Content = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    Text = $"You already have {string.Join(", ", taken.Select(n => $"\"{n}\""))}. Replace them with the imported ones, or keep both (the imported ones get a number)?",
+                },
+                PrimaryButtonText = "Keep both",
+                SecondaryButtonText = "Replace",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary,
+            };
+            var answer = await ask.ShowAsync();
+            if (answer == ContentDialogResult.None)
+            {
+                return;
+            }
+            replace = answer == ContentDialogResult.Secondary;
+        }
+        try
+        {
+            var imported = await _client.ImportProfilesAsync(presets, replace);
+            await LoadProfilesAsync();
+            ShowNotice(InfoBarSeverity.Success, imported.Count == 1 ? $"Imported \"{imported[0]}\"" : $"Imported {imported.Count} presets", "Pick them from File > Presets or the tray icon.");
+        }
+        catch (Exception e) when (Errors.Expected(e))
+        {
+            ShowNotice(InfoBarSeverity.Error, "Could not import the presets", Explain(e));
         }
     }
 

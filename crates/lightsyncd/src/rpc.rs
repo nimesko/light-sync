@@ -25,6 +25,9 @@
 //!   spread over the device / zone); hidden devices show the scene's colors for them
 //! - `profiles` -> `[name]`; `save_profile { name }`, `load_profile { name }`, `delete_profile { name }`
 //!   (a profile holds the lighting only: groups and fan layouts stay as they are)
+//! - `export_profiles { names? }` -> `{ lightsync_presets: 1, presets: { name: lighting } }` (all of
+//!   them without `names`); `import_profiles { presets, replace? }` -> `{ imported: [name], profiles }`:
+//!   checked and normalised; a name already taken gets " (2)"... unless `replace`
 //! - `audio_status` -> `{ active, device, level }`: whether sound is being captured (an audio
 //!   effect or an enabled audio trigger is visible), the output device captured (null if none
 //!   yet) and the current level 0..1
@@ -68,7 +71,7 @@
 
 use crate::audio::{AudioSource, NoAudio};
 use crate::effects::{self, AudioLevels, Effect, LightState, Palette, Split, Spot};
-use crate::scene::{FanLayout, Group, Scene};
+use crate::scene::{FanLayout, Group, Lighting, Scene};
 use crate::triggers::{self, Engine, Input, MouseButton, Overlay, Trigger};
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
@@ -76,6 +79,23 @@ use lightsync_core::{Color, DeviceKind};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+
+/// The most presets kept.
+const MAX_PROFILES: usize = 100;
+/// The most devices, zones and fans with their own lighting in one imported preset.
+const MAX_PROFILE_TARGETS: usize = 512;
+
+/// A state from outside (an imported preset) brought into range: a valid color, brightness 0..100,
+/// speed 1..100, at most 8 colors. (Unknown effects already read as Static.)
+fn sane_state(s: &mut LightState) {
+    s.color = match s.color.trim().trim_start_matches('#').parse::<Color>() {
+        Ok(c) => format!("{:02x}{:02x}{:02x}", c.r, c.g, c.b),
+        Err(_) => "ffffff".into(),
+    };
+    s.brightness = s.brightness.min(100);
+    s.speed = s.speed.clamp(1, 100);
+    s.colors = s.colors.min(8);
+}
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -412,6 +432,54 @@ impl<L: Lights> Daemon<L> {
         if self.scene != before {
             self.changed();
         }
+    }
+
+    /// Presets from a file (see `export_profiles`), checked before any is kept: names 1..64
+    /// characters, states with known effects and in range, at most `MAX_PROFILES` in all.
+    fn import_profiles(&mut self, p: &Value) -> Result<Value> {
+        let presets = p
+            .get("presets")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("that isn't a LightSync presets file"))?;
+        let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
+        if presets.is_empty() {
+            bail!("the file has no presets");
+        }
+        let mut checked: Vec<(String, Lighting)> = vec![];
+        for (name, v) in presets {
+            let name = name.trim().to_string();
+            if name.is_empty() || name.chars().count() > 64 {
+                bail!("a preset name must be 1..64 characters");
+            }
+            let mut l: Lighting = serde_json::from_value(v.clone()).map_err(|e| anyhow!("preset '{name}' can't be read: {e}"))?;
+            if l.overrides.len() > MAX_PROFILE_TARGETS || l.overrides.keys().any(|k| k.trim().is_empty() || k.len() > 256) {
+                bail!("preset '{name}' has too many or bad device ids");
+            }
+            sane_state(&mut l.default);
+            l.overrides.values_mut().for_each(sane_state);
+            checked.push((name, l));
+        }
+        // All or nothing: room for every new one first.
+        let added = checked.iter().filter(|(n, _)| !(replace && self.scene.profiles.contains_key(n))).count();
+        if self.scene.profiles.len() + added > MAX_PROFILES {
+            bail!("at most {MAX_PROFILES} presets: delete some first");
+        }
+        let mut imported = vec![];
+        for (name, l) in checked {
+            // A name in use: replaced, or the import gets "Name (2)", "Name (3)"...
+            let name = if replace || !self.scene.profiles.contains_key(&name) {
+                name
+            } else {
+                (2..)
+                    .map(|k| format!("{} ({k})", name.chars().take(58).collect::<String>()))
+                    .find(|n| !self.scene.profiles.contains_key(n))
+                    .unwrap_or(name)
+            };
+            self.scene.profiles.insert(name.clone(), l);
+            imported.push(name);
+        }
+        self.changed();
+        Ok(json!({ "imported": imported, "profiles": self.scene.profiles.keys().collect::<Vec<_>>() }))
     }
 
     fn input_event(&mut self, p: &Value) -> Result<Value> {
@@ -912,16 +980,35 @@ impl<L: Lights> Daemon<L> {
                 Ok(json!({ "profiles": self.scene.profiles.len() }))
             }
             "profiles" => Ok(json!(self.scene.profiles.keys().collect::<Vec<_>>())),
+            "export_profiles" => {
+                // Only the presets asked for (all without "names"): their lighting, nothing else.
+                let wanted: Option<Vec<String>> = match p.get("names") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(serde_json::from_value(v.clone()).map_err(|_| anyhow!("'names' must be a list of preset names"))?),
+                };
+                let presets: serde_json::Map<String, Value> = self
+                    .scene
+                    .profiles
+                    .iter()
+                    .filter(|(n, _)| wanted.as_ref().is_none_or(|w| w.contains(n)))
+                    .map(|(n, l)| Ok((n.clone(), serde_json::to_value(l)?)))
+                    .collect::<Result<_>>()?;
+                Ok(json!({ "lightsync_presets": 1, "presets": presets }))
+            }
+            "import_profiles" => self.import_profiles(p),
             "save_profile" | "load_profile" | "delete_profile" => {
                 let name = p
                     .get("name")
                     .and_then(Value::as_str)
                     .map(str::trim)
-                    .filter(|n| !n.is_empty())
-                    .ok_or_else(|| anyhow!("a profile needs a 'name'"))?
+                    .filter(|n| !n.is_empty() && n.chars().count() <= 64)
+                    .ok_or_else(|| anyhow!("a profile needs a 'name' of 1..64 characters"))?
                     .to_string();
                 match method {
                     "save_profile" => {
+                        if !self.scene.profiles.contains_key(&name) && self.scene.profiles.len() >= MAX_PROFILES {
+                            bail!("at most {MAX_PROFILES} presets");
+                        }
                         let l = self.scene.lighting();
                         self.scene.profiles.insert(name, l);
                     }
@@ -1289,6 +1376,40 @@ mod tests {
         assert!(!d.scene.off, "changing the lighting turns it back on");
         let r = call(&mut d, r#"{"id":10,"method":"delete_profile","params":{"name":"Red"}}"#).await;
         assert_eq!(r["result"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn presets_export_and_import() {
+        let mut d = Daemon::new(Fake::default(), None);
+        call(&mut d, r#"{"id":1,"method":"set_state","params":{"color":"ff0000"}}"#).await;
+        call(&mut d, r#"{"id":2,"method":"save_profile","params":{"name":"Red"}}"#).await;
+        call(&mut d, r#"{"id":3,"method":"set_state","params":{"color":"0000ff"}}"#).await;
+        call(&mut d, r#"{"id":4,"method":"save_profile","params":{"name":"Blue"}}"#).await;
+        // Export: all, or the ones asked for.
+        let all = call(&mut d, r#"{"id":5,"method":"export_profiles"}"#).await["result"].clone();
+        assert_eq!(all["lightsync_presets"], json!(1));
+        assert_eq!(all["presets"].as_object().unwrap().len(), 2);
+        let red = call(&mut d, r#"{"id":6,"method":"export_profiles","params":{"names":["Red"]}}"#).await["result"].clone();
+        assert_eq!(red["presets"].as_object().unwrap().keys().collect::<Vec<_>>(), ["Red"]);
+        assert_eq!(red["presets"]["Red"]["default"]["color"], json!("ff0000"));
+        // Import: a taken name gets " (2)" unless replacing; values are brought into range.
+        let mut file = red.clone();
+        file["presets"]["Red"]["default"]["brightness"] = json!(250);
+        file["presets"]["Red"]["default"]["color"] = json!("#00FF00");
+        file["presets"]["Red"]["default"]["effect"] = json!("some_future_effect");
+        let r = call(&mut d, &json!({"id":7,"method":"import_profiles","params":{"presets":file["presets"]}}).to_string()).await;
+        assert_eq!(r["result"]["imported"], json!(["Red (2)"]));
+        let got = &d.scene.profiles["Red (2)"].default;
+        assert_eq!((got.brightness, got.color.as_str(), got.effect), (100, "00ff00", Effect::Static));
+        let r = call(&mut d, &json!({"id":8,"method":"import_profiles","params":{"presets":file["presets"],"replace":true}}).to_string()).await;
+        assert_eq!(r["result"]["imported"], json!(["Red"]));
+        assert_eq!(d.scene.profiles.len(), 3);
+        // Bad files change nothing.
+        for bad in [json!({}), json!({"presets":{}}), json!({"presets":{"":{}}}), json!({"presets":{"X":{"default":{"palette":"nope"}}}})] {
+            let r = call(&mut d, &json!({"id":9,"method":"import_profiles","params":bad}).to_string()).await;
+            assert!(r["error"].is_object(), "{bad}");
+        }
+        assert_eq!(d.scene.profiles.len(), 3);
     }
 
     #[tokio::test]

@@ -262,16 +262,18 @@ public sealed partial class MainWindow
     /// or logged; a key not used by any trigger is sent without its code. Sends are dropped (not queued)
     /// while several are still on their way.
     /// </summary>
-    private void OnInput(string kind, int vk, string? button)
+    private void OnInput(string kind, int vk, int sc, string? button)
     {
         var plan = _inputPlan;
         int? code = null;
+        int? place = null;
         switch (kind)
         {
             case "key":
                 if (plan.AllCodes || plan.Codes.Contains(vk))
                 {
                     code = vk;
+                    place = sc > 0 ? sc : null;
                 }
                 else if (!plan.AnyKey)
                 {
@@ -291,7 +293,7 @@ public sealed partial class MainWindow
         {
             try
             {
-                await _inputClient.InputEventAsync(kind, code, button);
+                await _inputClient.InputEventAsync(kind, code, button, place);
             }
             catch (Exception failure) when (Errors.Expected(failure))
             {

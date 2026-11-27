@@ -350,15 +350,20 @@ public sealed class LightSyncClient
 
     /// <summary>
     /// Tell the service a key was pressed, the mouse clicked or moved. <paramref name="vk"/> is only
-    /// given for keys a trigger listens for; otherwise it is just "a key was pressed".
+    /// given for keys a trigger listens for; otherwise it is just "a key was pressed". <paramref name="sc"/>
+    /// is where the key is (its scan code), sent with the code, to light the pressed key itself.
     /// </summary>
     /// <returns>How many triggers fired ("fired"), 0 if the answer doesn't say.</returns>
-    public async Task<int> InputEventAsync(string kind, int? vk = null, string? button = null)
+    public async Task<int> InputEventAsync(string kind, int? vk = null, string? button = null, int? sc = null)
     {
         var p = new JsonObject { ["kind"] = kind };
         if (vk is { } k)
         {
             p["vk"] = k;
+        }
+        if (sc is { } place)
+        {
+            p["sc"] = place;
         }
         if (button is not null)
         {

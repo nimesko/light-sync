@@ -628,8 +628,9 @@ pub fn uses_audio(scene: &Scene) -> bool {
 /// One input event from the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Input {
-    /// A key went down (its virtual-key code, if the UI sent one).
-    Key(Option<u8>),
+    /// A key went down: its virtual-key code (which key triggers match) and its scan code (where it
+    /// is on the keyboard, whatever the layout: 0xE0__ for extended keys), if the UI sent them.
+    Key(Option<u8>, Option<u16>),
     Click(MouseButton),
     Move,
 }
@@ -823,8 +824,8 @@ impl Engine {
         }
         for t in scene.triggers.iter().filter(|t| t.enabled) {
             let hit = match (&t.source, ev) {
-                (Source::Key { keys: Keys::Any }, Input::Key(_)) => true,
-                (Source::Key { keys: Keys::Codes(c) }, Input::Key(Some(vk))) => c.contains(&vk),
+                (Source::Key { keys: Keys::Any }, Input::Key(..)) => true,
+                (Source::Key { keys: Keys::Codes(c) }, Input::Key(Some(vk), _)) => c.contains(&vk),
                 (Source::MouseClick { button }, Input::Click(b)) => button.is_none_or(|w| w == b),
                 (Source::MouseMove, Input::Move) => true,
                 _ => false,
@@ -1101,6 +1102,89 @@ fn key_names(vk: u8) -> &'static [&'static str] {
     }
 }
 
+/// OpenRGB's name for the key at this scan code (set 1; 0xE0__ for extended keys), by its place on a
+/// US / ISO keyboard, which is how OpenRGB names keys. Empty for codes whose key is better found by
+/// its virtual-key code (Pause, Num Lock).
+fn scan_names(sc: u16) -> &'static [&'static str] {
+    match sc {
+        0x01 => &["Escape"],
+        0x02 => &["1"], 0x03 => &["2"], 0x04 => &["3"], 0x05 => &["4"], 0x06 => &["5"],
+        0x07 => &["6"], 0x08 => &["7"], 0x09 => &["8"], 0x0A => &["9"], 0x0B => &["0"],
+        0x0C => &["-"],
+        0x0D => &["="],
+        0x0E => &["Backspace"],
+        0x0F => &["Tab"],
+        0x10 => &["Q"], 0x11 => &["W"], 0x12 => &["E"], 0x13 => &["R"], 0x14 => &["T"],
+        0x15 => &["Y"], 0x16 => &["U"], 0x17 => &["I"], 0x18 => &["O"], 0x19 => &["P"],
+        0x1A => &["["],
+        0x1B => &["]"],
+        0x1C => &["Enter", "Enter (ISO)"],
+        0x1D => &["Left Control"],
+        0x1E => &["A"], 0x1F => &["S"], 0x20 => &["D"], 0x21 => &["F"], 0x22 => &["G"],
+        0x23 => &["H"], 0x24 => &["J"], 0x25 => &["K"], 0x26 => &["L"],
+        0x27 => &[";"],
+        0x28 => &["'"],
+        0x29 => &["`"],
+        0x2A => &["Left Shift"],
+        0x2B => &["\\ (ANSI)", "\\", "# (ISO)", "#"],
+        0x2C => &["Z"], 0x2D => &["X"], 0x2E => &["C"], 0x2F => &["V"], 0x30 => &["B"],
+        0x31 => &["N"], 0x32 => &["M"],
+        0x33 => &[","],
+        0x34 => &["."],
+        0x35 => &["/"],
+        0x36 => &["Right Shift"],
+        0x37 => &["Number Pad *"],
+        0x38 => &["Left Alt"],
+        0x39 => &["Space"],
+        0x3A => &["Caps Lock"],
+        0x3B => &["F1"], 0x3C => &["F2"], 0x3D => &["F3"], 0x3E => &["F4"], 0x3F => &["F5"],
+        0x40 => &["F6"], 0x41 => &["F7"], 0x42 => &["F8"], 0x43 => &["F9"], 0x44 => &["F10"],
+        0x46 => &["Scroll Lock"],
+        0x47 => &["Number Pad 7"],
+        0x48 => &["Number Pad 8"],
+        0x49 => &["Number Pad 9"],
+        0x4A => &["Number Pad -"],
+        0x4B => &["Number Pad 4"],
+        0x4C => &["Number Pad 5"],
+        0x4D => &["Number Pad 6"],
+        0x4E => &["Number Pad +"],
+        0x4F => &["Number Pad 1"],
+        0x50 => &["Number Pad 2"],
+        0x51 => &["Number Pad 3"],
+        0x52 => &["Number Pad 0"],
+        0x53 => &["Number Pad ."],
+        0x56 => &["\\ (ISO)"],
+        0x57 => &["F11"],
+        0x58 => &["F12"],
+        0xE010 => &["Media Previous"],
+        0xE019 => &["Media Next"],
+        0xE01C => &["Number Pad Enter"],
+        0xE01D => &["Right Control"],
+        0xE020 => &["Media Mute"],
+        0xE022 => &["Media Play/Pause"],
+        0xE024 => &["Media Stop"],
+        0xE02E => &["Media Volume -"],
+        0xE030 => &["Media Volume +"],
+        0xE035 => &["Number Pad /"],
+        0xE037 => &["Print Screen"],
+        0xE038 => &["Right Alt"],
+        0xE047 => &["Home"],
+        0xE048 => &["Up Arrow"],
+        0xE049 => &["Page Up"],
+        0xE04B => &["Left Arrow"],
+        0xE04D => &["Right Arrow"],
+        0xE04F => &["End"],
+        0xE050 => &["Down Arrow"],
+        0xE051 => &["Page Down"],
+        0xE052 => &["Insert"],
+        0xE053 => &["Delete"],
+        0xE05B => &["Left Windows"],
+        0xE05C => &["Right Windows"],
+        0xE05D => &["Menu", "Context"],
+        _ => &[],
+    }
+}
+
 /// The LED a local effect starts from on this device: the pressed key (by its name), the mouse
 /// wheel for mouse events, else the middle of the device.
 fn origin_led(d: &DeviceInfo, origin: Option<Input>, n: usize) -> usize {
@@ -1108,7 +1192,14 @@ fn origin_led(d: &DeviceInfo, origin: Option<Input>, n: usize) -> usize {
     let find = |pred: &dyn Fn(&str) -> bool| names.iter().take(n).position(|s| pred(s));
     let key = |s: &str| s.strip_prefix("Key: ").unwrap_or(s).to_string();
     let found = match origin {
-        Some(Input::Key(Some(vk))) => key_names(vk).iter().find_map(|want| find(&|s| key(s).eq_ignore_ascii_case(want))),
+        // The key's place first (its scan code: right Shift, the number pad without Num Lock and
+        // other layouts all stay where they are), then its name from the virtual-key code.
+        Some(Input::Key(vk, sc)) => sc
+            .map(scan_names)
+            .into_iter()
+            .chain(vk.map(key_names))
+            .flatten()
+            .find_map(|want| find(&|s| key(s).eq_ignore_ascii_case(want))),
         Some(Input::Click(_)) | Some(Input::Move) => {
             find(&|s| {
                 let s = s.to_ascii_lowercase();
@@ -1337,13 +1428,32 @@ mod tests {
     }
 
     #[test]
+    fn the_pressed_key_is_found_by_its_place() {
+        // The scan code wins over the virtual-key code: on an AZERTY layout the key at the "Q" place
+        // sends VK 'A' (and scan code 0x10, the Q place); the Q LED must light.
+        let kb = keyboard();
+        assert_eq!(origin_led(&kb, Some(Input::Key(Some(b'A'), Some(0x10))), 9), 0, "Q, by its place");
+        assert_eq!(origin_led(&kb, Some(Input::Key(Some(b'A'), None)), 9), 3, "no scan code: by its name");
+        assert_eq!(origin_led(&kb, Some(Input::Key(None, Some(0x1F))), 9), 4, "S");
+        // An unknown scan code falls back to the virtual-key code, then the middle.
+        assert_eq!(origin_led(&kb, Some(Input::Key(Some(b'D'), Some(0x7F))), 9), 5);
+        assert_eq!(origin_led(&kb, Some(Input::Key(None, Some(0x7F))), 9), 4);
+        // Right-hand and number pad keys by their own place.
+        assert_eq!(scan_names(0x36), ["Right Shift"]);
+        assert_eq!(scan_names(0xE01D), ["Right Control"]);
+        assert_eq!(scan_names(0x47), ["Number Pad 7"]);
+        assert_eq!(scan_names(0xE047), ["Home"]);
+        assert_eq!(scan_names(0xE01C), ["Number Pad Enter"]);
+    }
+
+    #[test]
     fn rings_light_one_after_another_and_random_colors_vary() {
         // Radius 2, 100 ms per ring, 300 ms each: S at once, its neighbours at 100 ms, corners (ring 1
         // on the grid's diagonal is 1.4 -> ring 1) too; Q..C all within ring 2.
         let t = trig(json!({"id":"t1","name":"k","source":{"kind":"key","keys":"any"},"action":{"kind":"flash","color":"ff0000","duration_ms":300,"radius":1,"layer_delay_ms":100}}));
         let s = scene_with(vec![t]);
         let mut e = Engine::default();
-        e.input(&s, Input::Key(Some(b'S')), ms(0));
+        e.input(&s, Input::Key(Some(b'S'), None), ms(0));
         let lit_at = |e: &mut Engine, at: u64| {
             let mut frame = vec![Color::BLACK; 9];
             e.overlay(&s, ms(at), &AudioLevels::SILENT).apply(&keyboard(), &s, &mut frame);
@@ -1359,7 +1469,7 @@ mod tests {
         let mut e = Engine::default();
         let mut seen = std::collections::BTreeSet::new();
         for k in 0..8u64 {
-            e.input(&s, Input::Key(None), ms(100 * k));
+            e.input(&s, Input::Key(None, None), ms(100 * k));
             let mut frame = vec![Color::BLACK; 1];
             e.overlay(&s, ms(100 * k), &AudioLevels::SILENT).apply(&dev(1), &s, &mut frame);
             seen.insert((frame[0].r, frame[0].g, frame[0].b));
@@ -1633,7 +1743,7 @@ mod tests {
             let s = scene_with(vec![t]);
             assert!(input_wanted(&s).key_codes, "local key effects need the key codes");
             let mut e = Engine::default();
-            e.input(&s, Input::Key(Some(vk)), ms(0));
+            e.input(&s, Input::Key(Some(vk), None), ms(0));
             let mut frame = vec![Color::BLACK; 9];
             e.overlay_at(ms(0)).apply(&keyboard(), &s, &mut frame);
             frame.iter().map(|c| *c == red).collect::<Vec<_>>()
@@ -1648,7 +1758,7 @@ mod tests {
         let t = trig(json!({"id":"t1","name":"k","source":{"kind":"key","keys":"any"},"action":{"kind":"ripple","color":"ff0000","duration_ms":1000,"radius":2.0}}));
         let s = scene_with(vec![t]);
         let mut e = Engine::default();
-        e.input(&s, Input::Key(Some(b'Q')), ms(0));
+        e.input(&s, Input::Key(Some(b'Q'), None), ms(0));
         let mut frame = vec![Color::BLACK; 9];
         e.overlay_at(ms(0)).apply(&keyboard(), &s, &mut frame);
         assert!(frame[0].r > 200 && frame[8] == Color::BLACK, "{frame:?}");
@@ -1657,7 +1767,7 @@ mod tests {
         let s = scene_with(vec![t]);
         assert!(!input_wanted(&s).key_codes);
         let mut e = Engine::default();
-        e.input(&s, Input::Key(None), ms(0));
+        e.input(&s, Input::Key(None, None), ms(0));
         let mut frame = vec![Color::BLACK; 9];
         e.overlay_at(ms(0)).apply(&keyboard(), &s, &mut frame);
         assert!(frame.iter().all(|c| *c == red));
@@ -1739,11 +1849,11 @@ mod tests {
         let mv = trig(json!({"id":"t3","name":"m","source":{"kind":"mouse_move"},"action":{"kind":"fade_in","color":"0000ff","duration_ms":500}}));
         let s = scene_with(vec![flash, click, mv]);
         let mut e = Engine::default();
-        assert_eq!(e.input(&s, Input::Key(Some(66)), ms(0)).count, 0);
-        assert_eq!(e.input(&s, Input::Key(None), ms(0)).count, 0, "listed keys need a code");
-        assert_eq!(e.input(&s, Input::Key(Some(65)), ms(0)).count, 1);
-        assert_eq!(e.input(&s, Input::Key(Some(65)), ms(30)).count, 0, "at most once per 50 ms");
-        assert_eq!(e.input(&s, Input::Key(Some(65)), ms(60)).count, 1);
+        assert_eq!(e.input(&s, Input::Key(Some(66), None), ms(0)).count, 0);
+        assert_eq!(e.input(&s, Input::Key(None, None), ms(0)).count, 0, "listed keys need a code");
+        assert_eq!(e.input(&s, Input::Key(Some(65), None), ms(0)).count, 1);
+        assert_eq!(e.input(&s, Input::Key(Some(65), None), ms(30)).count, 0, "at most once per 50 ms");
+        assert_eq!(e.input(&s, Input::Key(Some(65), None), ms(60)).count, 1);
         assert_eq!(e.input(&s, Input::Click(MouseButton::Left), ms(60)).count, 0);
         assert_eq!(e.input(&s, Input::Click(MouseButton::Right), ms(60)).count, 1);
         // Mouse moves are throttled; a fade_in glow builds while they repeat.
@@ -1756,13 +1866,13 @@ mod tests {
         assert!(glow[0].level > FADE_STEP * 2.0, "built up: {}", glow[0].level);
         // Off: nothing fires. Instances end after their duration.
         let off = Scene { off: true, ..s.clone() };
-        assert_eq!(e.input(&off, Input::Key(Some(65)), ms(1000)).count, 0);
+        assert_eq!(e.input(&off, Input::Key(Some(65), None), ms(1000)).count, 0);
         assert!(e.is_active());
         assert!(e.overlay_at(ms(5000)).is_empty());
         assert!(!e.is_active());
         // At most MAX_ACTIVE instances.
         for k in 0..200 {
-            e.input(&s, Input::Key(Some(65)), ms(10_000 + k * 60));
+            e.input(&s, Input::Key(Some(65), None), ms(10_000 + k * 60));
         }
         assert_eq!(e.active.len(), MAX_ACTIVE);
     }

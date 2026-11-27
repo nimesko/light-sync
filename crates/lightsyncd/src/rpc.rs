@@ -57,7 +57,7 @@
 //!   ("chrome.exe"), and which watched sites a browser shows now ("chrome.exe/youtube.com").
 //! - `move_trigger { id, to }` -> `[Trigger]`: move a trigger to position `to`. The list order is the
 //!   priority: where triggers light the same LEDs, the one higher in the list is painted on top.
-//! - `input_event { kind: "key"|"mouse_click"|"mouse_move", vk?, button? }` -> `{ fired }`: input
+//! - `input_event { kind: "key"|"mouse_click"|"mouse_move", vk?, sc?, button? }` -> `{ fired }`: input
 //!   seen by the UI (`button` defaults to "left"). Key codes are only matched, never logged or kept.
 //! - `input_wanted` -> `{ keys, key_codes, mouse_click, mouse_move }`: which input an enabled trigger
 //!   needs (the UI listens to nothing else; all false while the lights are off). `key_codes`: a key
@@ -417,15 +417,27 @@ impl<L: Lights> Daemon<L> {
     fn input_event(&mut self, p: &Value) -> Result<Value> {
         // Never echo or keep the key code: it only selects which key triggers fire.
         let ev = match p.get("kind").and_then(Value::as_str) {
-            Some("key") => Input::Key(match p.get("vk") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(
-                    v.as_u64()
-                        .and_then(|k| u8::try_from(k).ok())
-                        .filter(|k| (1..=254).contains(k))
-                        .ok_or_else(|| anyhow!("'vk' must be an integer 1..254"))?,
-                ),
-            }),
+            Some("key") => Input::Key(
+                match p.get("vk") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(
+                        v.as_u64()
+                            .and_then(|k| u8::try_from(k).ok())
+                            .filter(|k| (1..=254).contains(k))
+                            .ok_or_else(|| anyhow!("'vk' must be an integer 1..254"))?,
+                    ),
+                },
+                // Where the key is (its scan code, 0xE0__ for extended keys): places a local effect.
+                match p.get("sc") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(
+                        v.as_u64()
+                            .and_then(|k| u16::try_from(k).ok())
+                            .filter(|k| (1..=0xE1FF).contains(k))
+                            .ok_or_else(|| anyhow!("'sc' must be a scan code"))?,
+                    ),
+                },
+            ),
             Some("mouse_click") => Input::Click(match p.get("button") {
                 None | Some(Value::Null) => MouseButton::Left,
                 Some(v) => serde_json::from_value(v.clone())

@@ -13,8 +13,8 @@ namespace LightSync.App;
 /// </summary>
 internal sealed class InputListener : IDisposable
 {
-    /// <summary>"key" (with its virtual-key code), "mouse_click" (with "left", "right" or "middle") or "mouse_move". Called on the listener thread.</summary>
-    private readonly Action<string, int, string?> _onInput;
+    /// <summary>"key" (with its virtual-key and scan codes), "mouse_click" (with "left", "right" or "middle") or "mouse_move". Called on the listener thread.</summary>
+    private readonly Action<string, int, int, string?> _onInput;
     private readonly object _gate = new();
     private Thread? _thread;
     private IntPtr _hwnd;
@@ -25,7 +25,7 @@ internal sealed class InputListener : IDisposable
     private bool _disposed;
     private readonly HashSet<ushort> _down = [];
 
-    public InputListener(Action<string, int, string?> onInput)
+    public InputListener(Action<string, int, int, string?> onInput)
     {
         _onInput = onInput;
         _wndProc = Proc;
@@ -268,7 +268,7 @@ internal sealed class InputListener : IDisposable
                 {
                     if (_down.Add(vk)) // held keys repeat: only the first press counts
                     {
-                        _onInput("key", vk, null);
+                        _onInput("key", vk, ScanCode(data), null);
                     }
                 }
                 else if (message is WM_KEYUP or WM_SYSKEYUP)
@@ -286,15 +286,15 @@ internal sealed class InputListener : IDisposable
                 {
                     if ((buttons & RI_MOUSE_LEFT_BUTTON_DOWN) != 0)
                     {
-                        _onInput("mouse_click", 0, "left");
+                        _onInput("mouse_click", 0, 0, "left");
                     }
                     if ((buttons & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0)
                     {
-                        _onInput("mouse_click", 0, "right");
+                        _onInput("mouse_click", 0, 0, "right");
                     }
                     if ((buttons & RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0)
                     {
-                        _onInput("mouse_click", 0, "middle");
+                        _onInput("mouse_click", 0, 0, "middle");
                     }
                 }
                 if (_wantMoves && (dx != 0 || dy != 0))
@@ -304,7 +304,7 @@ internal sealed class InputListener : IDisposable
                     if (now - _lastMove >= 33)
                     {
                         _lastMove = now;
-                        _onInput("mouse_move", 0, null);
+                        _onInput("mouse_move", 0, 0, null);
                     }
                 }
             }
@@ -315,9 +315,25 @@ internal sealed class InputListener : IDisposable
         }
     }
 
+    /// <summary>
+    /// Where a key is (RAWKEYBOARD's MakeCode, with 0xE000 for extended keys): the same place whatever
+    /// the layout, and different for the right-hand Shift, Ctrl and Alt and the number pad. 0: unknown.
+    /// </summary>
+    private static int ScanCode(IntPtr keyboard)
+    {
+        var make = (ushort)Marshal.ReadInt16(keyboard, 0);
+        var flags = (ushort)Marshal.ReadInt16(keyboard, 2);
+        if (make is 0 or > 0x7F || (flags & RI_KEY_E1) != 0)
+        {
+            return 0; // Pause and odd codes: found by the virtual-key code
+        }
+        return (flags & RI_KEY_E0) != 0 ? 0xE000 | make : make;
+    }
+
     // ---------- Win32 ----------
 
     private const uint WM_DESTROY = 0x0002, WM_CLOSE = 0x0010, WM_INPUT = 0x00FF, WM_APP_UPDATE = 0x8001;
+    private const ushort RI_KEY_E0 = 0x0002, RI_KEY_E1 = 0x0004;
     private const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
     private const uint RIDEV_REMOVE = 0x00000001, RIDEV_INPUTSINK = 0x00000100;
     private const uint RID_INPUT = 0x10000003;

@@ -73,8 +73,24 @@ public sealed partial class MainWindow
         UpdatePreviewActivity();
     }
 
-    /// <summary>The 3D preview only runs while it can be seen: on Home, with the window on screen.</summary>
-    private void UpdatePreviewActivity() => _preview.SetActive(_view == ShellView.Home && IsOnScreen);
+    /// <summary>
+    /// The 3D preview only runs while it can be seen: on Home, with the window on screen. Hidden to the
+    /// tray or minimized, its colour updates and the sound views stop too, so nothing wakes up for them.
+    /// </summary>
+    private void UpdatePreviewActivity()
+    {
+        var on = _view == ShellView.Home && IsOnScreen;
+        _preview.SetActive(on);
+        if (on)
+        {
+            _previewTimer.Start();
+        }
+        else
+        {
+            _previewTimer.Stop();
+        }
+        UpdateSoundViews();
+    }
 
     /// <summary>Outline in the preview what the right side is about: the selected parts, the trigger's targets, or nothing on Home.</summary>
     private void HighlightPreview()

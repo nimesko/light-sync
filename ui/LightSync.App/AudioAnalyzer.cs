@@ -357,7 +357,7 @@ public sealed partial class MainWindow
         _deviceSound.Polling = _view == ShellView.Device && deviceAudio;
         _homeSound.Polling = _view == ShellView.Home;
         RecolorAnalyzer();
-        if (!_exiting && _visualizers.Any(v => v.Polling))
+        if (!_exiting && IsOnScreen && _visualizers.Any(v => v.Polling))
         {
             _analyzerTimer.Start();
         }

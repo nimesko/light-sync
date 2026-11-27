@@ -995,7 +995,7 @@ impl Engine {
         }));
         // Stable: lower priority (higher rank) first; app lighting under the fired effects of the
         // same trigger rank.
-        items.sort_by(|a, b| b.rank.cmp(&a.rank));
+        items.sort_by_key(|i| std::cmp::Reverse(i.rank));
         Overlay { items, t: now.as_secs_f32(), audio: *audio }
     }
 }
@@ -1307,7 +1307,7 @@ impl Overlay {
             // LEDs ("<device>@<index>"; "#" can be part of a device id: "openrgb:ENE DRAM#2").
             // (Runs every frame for every device: nothing is allocated for whole-device targets, and
             // zone paths are only built when a zone / fan target needs them.)
-            let whole = it.targets.is_empty() || it.targets.iter().any(|t| *t == d.id);
+            let whole = it.targets.is_empty() || it.targets.contains(&d.id);
             let under = |t: &str, sep: u8| t.len() > d.id.len() && t.starts_with(d.id.as_str()) && t.as_bytes()[d.id.len()] == sep;
             let single: Vec<usize> = if whole {
                 Vec::new()

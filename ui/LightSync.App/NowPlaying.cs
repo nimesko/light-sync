@@ -87,38 +87,101 @@ public static class NowPlaying
     public static bool IsBrowser(string exe) =>
         Browsers.Contains(Path.GetFileNameWithoutExtension(exe.Trim()), StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Each browser window's address bar, found once (searching a window is slow) and read again on every check.</summary>
+    private static readonly Dictionary<int, AutomationElement> AddressBars = [];
+
     /// <summary>
     /// The sites (hosts) of the pages a browser shows now: each window's current tab, from its address bar
-    /// (UI Automation). Used only for "app is running" triggers that watch a site; nothing is kept.
+    /// (UI Automation). Used only for "app is running" triggers that watch a site; nothing is kept but
+    /// where each window's address bar is.
     /// </summary>
+    /// <remarks>
+    /// Runs every couple of seconds, so it stays cheap: the top-level windows are listed once with their
+    /// process and title in one call (a browser has dozens of processes, most without a window), only
+    /// titled windows of the browser are looked at, and each window's address bar is searched for once.
+    /// </remarks>
     public static HashSet<string> CurrentHosts(string exe)
     {
         var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ids = new HashSet<int>();
         foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exe.Trim())))
         {
             using (p)
             {
-                try
+                ids.Add(p.Id);
+            }
+        }
+        if (ids.Count == 0)
+        {
+            return hosts;
+        }
+        lock (AddressBars)
+        {
+            var seen = new HashSet<int>();
+            try
+            {
+                var request = new CacheRequest();
+                request.Add(AutomationElement.ProcessIdProperty);
+                request.Add(AutomationElement.NameProperty);
+                request.Add(AutomationElement.NativeWindowHandleProperty);
+                AutomationElementCollection windows;
+                using (request.Activate())
                 {
-                    var windows = AutomationElement.RootElement.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, p.Id));
-                    foreach (AutomationElement window in windows)
+                    windows = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
+                }
+                foreach (AutomationElement window in windows)
+                {
+                    if (!ids.Contains(window.Cached.ProcessId) || string.IsNullOrEmpty(window.Cached.Name))
                     {
-                        // The address bar is the first text box in the window (the toolbar comes before the page).
-                        var edit = window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-                        if (edit?.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern) == true
-                            && SiteHost(((ValuePattern)pattern).Current.Value) is { Length: > 0 } host)
-                        {
-                            hosts.Add(host);
-                        }
+                        continue;
+                    }
+                    var hwnd = window.Cached.NativeWindowHandle;
+                    seen.Add(hwnd);
+                    if (AddressHost(hwnd, window) is { Length: > 0 } host)
+                    {
+                        hosts.Add(host);
                     }
                 }
-                catch (Exception failure) when (Errors.Expected(failure))
-                {
-                    // The window closed, or the browser is busy: the next check reads it again.
-                }
+            }
+            catch (Exception failure) when (Errors.Expected(failure))
+            {
+                // The browser is busy: the next check reads it again.
+            }
+            // Windows that closed.
+            foreach (var gone in AddressBars.Keys.Where(k => !seen.Contains(k)).ToList())
+            {
+                AddressBars.Remove(gone);
             }
         }
         return hosts;
+    }
+
+    /// <summary>The host of the page a browser window shows ("" if none), from its address bar.</summary>
+    private static string AddressHost(int hwnd, AutomationElement window)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                if (!AddressBars.TryGetValue(hwnd, out var edit))
+                {
+                    // The address bar is the first text box in the window (the toolbar comes before the page).
+                    edit = window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+                    if (edit is null)
+                    {
+                        return "";
+                    }
+                    AddressBars[hwnd] = edit;
+                }
+                return edit.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern) ? SiteHost(((ValuePattern)pattern).Current.Value) : "";
+            }
+            catch (Exception failure) when (Errors.Expected(failure))
+            {
+                // The address bar went away (the window changed): find it again once.
+                AddressBars.Remove(hwnd);
+            }
+        }
+        return "";
     }
 
     /// <summary>

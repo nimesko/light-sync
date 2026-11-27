@@ -57,6 +57,14 @@ pub enum Effect {
     LightningStorm,
     /// Two neon colors (the chosen one and its opposite) chase each other in glowing waves.
     NeonPulse,
+    /// A ball of the chosen color bounces along each device, slowing at the top of each hop.
+    Bounce,
+    /// Dots of every color pop up at random and fade.
+    Confetti,
+    /// Warm sunset colors (gold, orange, pink, violet) drifting slowly along each device.
+    Sunset,
+    /// A rotating beacon of the chosen color sweeping round each device, like a warning light.
+    Beacon,
     /// Sound reactive: every beat flashes the lights, as bright as the beat is strong, fading at a
     /// rate set by the speed. Each light (device, zone or LED: [`Split`]) gets its own color.
     /// (Older sound effects saved before it are read as the closest of the three.)
@@ -68,8 +76,17 @@ pub enum Effect {
     SoundBass,
     /// Sound reactive: each light (device, zone or LED) shows one part of the spectrum, bass first,
     /// as bright as that part is loud.
-    #[serde(alias = "spectrum_bars", alias = "spectrum_analyzer", alias = "vu_meter", alias = "treble_sparkle", alias = "music_flow")]
+    #[serde(alias = "spectrum_bars", alias = "spectrum_analyzer", alias = "music_flow")]
     SoundSpectrum,
+    /// Sound reactive: a level meter along each device, filling as the sound gets louder, with a
+    /// falling peak.
+    #[serde(alias = "vu_meter")]
+    SoundLevel,
+    /// Sound reactive: every beat sends a wave from the middle of each device out to its ends.
+    SoundRipple,
+    /// Sound reactive: LEDs sparkle with the treble (hi-hats, cymbals, voices), more as it gets busier.
+    #[serde(alias = "treble_sparkle")]
+    SoundSparkle,
 }
 
 /// Which lights a sound effect treats as one: what gets its own color (and, for the spectrum, its
@@ -126,7 +143,10 @@ impl Effect {
 
     /// Whether the effect reacts to sound (the daemon only captures audio while one is shown).
     pub fn is_audio(self) -> bool {
-        matches!(self, Effect::SoundBeat | Effect::SoundBass | Effect::SoundSpectrum)
+        matches!(
+            self,
+            Effect::SoundBeat | Effect::SoundBass | Effect::SoundSpectrum | Effect::SoundLevel | Effect::SoundRipple | Effect::SoundSparkle
+        )
     }
 
     pub fn parse(s: &str) -> Option<Effect> {
@@ -393,6 +413,32 @@ fn split_light(state: &LightState, spot: &Spot, audio: &AudioLevels, speed: f32)
         Effect::SoundBass => {
             let b = drive(audio.bass, audio.bass_punch, sens);
             (b * b, b)
+        }
+        Effect::SoundLevel => {
+            // Along each device's LEDs: lit up to the level, the peak a bright dot above it. Heat is
+            // the place on the meter, so "cold to hot" reads green-blue at the bottom, red at the top.
+            let p = if spot.n > 1 { spot.i as f32 / (spot.n - 1) as f32 } else { 0.0 };
+            let fill = drive(audio.level, audio.level_punch, sens);
+            let peak = (audio.level_peak * sens).clamp(0.0, 1.0);
+            let edge = 1.0 / spot.n.max(2) as f32;
+            let v = if p <= fill { 1.0 } else if (p - peak).abs() <= edge { 0.8 } else { 0.0 };
+            (v, p)
+        }
+        Effect::SoundRipple => {
+            // A wave from the middle of each device, out to its ends, on every beat.
+            let p = if spot.n > 1 { spot.i as f32 / (spot.n - 1) as f32 } else { 0.5 };
+            let dist = (p - 0.5).abs() * 2.0;
+            let front = audio.beat_age.max(0.0) * lerp(1.0, 5.0, speed);
+            // Full strength until it reaches the ends, then it fades out.
+            let k = (-((dist - front) / 0.18).powi(2)).exp() * (1.0 - (front - 1.0) / 0.4).clamp(0.0, 1.0) * audio.beat_strength;
+            (k, k)
+        }
+        Effect::SoundSparkle => {
+            // Each LED, in short slots, sparkles with a chance that follows the treble's hits.
+            let chance = drive(audio.treble, audio.treble_punch, sens) * 0.6;
+            let slot = (audio.phase * 8.0).floor().max(0.0) as u32 ^ audio.beat_count.wrapping_mul(131);
+            let k = if hash(spot.i as u32 ^ (spot.device as u32).wrapping_mul(7717), slot) < chance { 1.0 } else { 0.0 };
+            (k, chance)
         }
         _ => {
             let b = if units > 1 {
@@ -672,7 +718,46 @@ pub fn render_spot(state: &LightState, t: f32, spot: &Spot, audio: &AudioLevels)
             let glow = 0.75 + 0.25 * (std::f32::consts::TAU * t * rate * 0.5).sin();
             hsv(if w >= 0.0 { h } else { h + 0.5 }, s, w.abs().powf(0.6) * glow)
         }
-        Effect::SoundBeat | Effect::SoundBass | Effect::SoundSpectrum => split_light(state, spot, audio, speed),
+        Effect::Bounce => {
+            // A hop takes a period; the ball's height is a parabola, so it hangs at the top.
+            let period = lerp(2.4, 0.5, speed);
+            let p = (t / period).rem_euclid(1.0);
+            let ball = 4.0 * p * (1.0 - p);
+            let x = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 };
+            let width = (1.5 / n.max(1) as f32).max(0.08);
+            let k = (1.0 - (x - ball).abs() / width).max(0.0);
+            mul(base, 0.03 + 0.97 * k * k)
+        }
+        Effect::Confetti => {
+            // Each LED pops now and then in a color of its own, then fades.
+            let period = lerp(3.0, 0.6, speed);
+            let phase = t / period + hash(i as u32, 13);
+            let cycle = phase.floor() as u32;
+            let f = phase.fract();
+            let lit = hash(i as u32, cycle.wrapping_mul(97).wrapping_add(3)) < 0.45;
+            let k = if lit { (1.0 - f).powi(3) } else { 0.0 };
+            hsv(hash(i as u32, cycle.wrapping_mul(31).wrapping_add(7)), 0.9, 0.02 + 0.98 * k)
+        }
+        Effect::Sunset => {
+            let rate = lerp(0.01, 0.15, speed);
+            let w = 0.5 + 0.5 * (std::f32::consts::TAU * (pos * 0.9 - t * rate)).sin();
+            let w2 = 0.5 + 0.5 * (std::f32::consts::TAU * (pos * 2.1 + t * rate * 1.3)).sin();
+            // Gold (0.12) through orange and pink down to violet (0.8, wrapping through red).
+            let hue = lerp(0.12, -0.2, w * 0.8 + w2 * 0.2);
+            hsv(hue, lerp(0.85, 1.0, w), lerp(0.6, 1.0, 1.0 - w * 0.5))
+        }
+        Effect::Beacon => {
+            let rate = lerp(0.3, 2.5, speed);
+            let head = (t * rate).rem_euclid(1.0);
+            // Distance round the device, as if its LEDs made a ring.
+            let d = (pos - head).rem_euclid(1.0);
+            let d = d.min(1.0 - d);
+            let k = (1.0 - d / 0.2).max(0.0);
+            mul(base, 0.04 + 0.96 * k * k)
+        }
+        Effect::SoundBeat | Effect::SoundBass | Effect::SoundSpectrum | Effect::SoundLevel | Effect::SoundRipple | Effect::SoundSparkle => {
+            split_light(state, spot, audio, speed)
+        }
     };
     mul(c, state.brightness.min(100) as f32 / 100.0)
 }
@@ -893,12 +978,46 @@ mod tests {
     }
 
     #[test]
-    fn older_sound_effects_become_beat_bass_or_spectrum() {
+    fn new_effects_move_and_follow_the_sound() {
+        // Bounce, Confetti, Sunset and Beacon change over time and along the device.
+        for e in [Effect::Bounce, Effect::Confetti, Effect::Sunset, Effect::Beacon] {
+            let s = st(e);
+            let frame = |t: f32| (0..30).map(|i| render(&s, t, i, 30)).collect::<Vec<_>>();
+            assert_ne!(frame(0.2), frame(1.7), "{e:?} doesn't move");
+            assert!(frame(0.2).windows(2).any(|w| w[0] != w[1]), "{e:?} is flat");
+        }
+        // The level meter fills from the start of the device as the sound gets louder.
+        let level = |v: f32| AudioLevels { level: v, level_punch: v, level_peak: v, ..AudioLevels::SILENT };
+        let meter = st(Effect::SoundLevel);
+        let lit = |a: &AudioLevels| (0..20).filter(|&i| render_with(&meter, 0.0, i, 20, a).r > 40).count();
+        assert!(lit(&level(0.0)) <= 1);
+        assert!(lit(&level(0.3)) > lit(&level(0.0)));
+        assert!(lit(&level(0.8)) > lit(&level(0.3)));
+        assert!(render_with(&meter, 0.0, 0, 20, &level(0.8)).r > 200, "the bottom is lit");
+        // A ripple starts in the middle on a beat and reaches the ends later.
+        let ripple = st(Effect::SoundRipple);
+        let beat = |age: f32| AudioLevels { beat: age < 0.1, beat_age: age, beat_strength: 1.0, ..AudioLevels::SILENT };
+        assert!(render_with(&ripple, 0.0, 10, 21, &beat(0.0)).r > 200);
+        assert!(render_with(&ripple, 0.0, 0, 21, &beat(0.0)).r < 40);
+        let later = (0..60).map(|k| k as f32 * 0.01).find(|&a| render_with(&ripple, 0.0, 0, 21, &beat(a)).r > 150);
+        assert!(later.is_some_and(|a| a > 0.05), "{later:?}");
+        // Sparkles: none in silence, some with busy treble.
+        let sparkle = st(Effect::SoundSparkle);
+        let busy = AudioLevels { treble: 0.9, treble_punch: 0.9, phase: 3.3, ..AudioLevels::SILENT };
+        assert_eq!((0..40).filter(|&i| render_with(&sparkle, 0.0, i, 40, &AudioLevels::SILENT).r > 100).count(), 0);
+        assert!((0..40).filter(|&i| render_with(&sparkle, 0.0, i, 40, &busy).r > 100).count() > 5);
+        for e in [Effect::SoundLevel, Effect::SoundRipple, Effect::SoundSparkle] {
+            assert!(e.is_audio());
+        }
+    }
+
+    #[test]
+    fn older_sound_effects_become_their_closest() {
         for (old, new) in [
             ("beat_flash", Effect::SoundBeat),
             ("sound_pulse", Effect::SoundBass), ("bass_glow", Effect::SoundBass), ("bass_wave", Effect::SoundBass), ("bass_treble", Effect::SoundBass),
-            ("spectrum_bars", Effect::SoundSpectrum), ("spectrum_analyzer", Effect::SoundSpectrum), ("vu_meter", Effect::SoundSpectrum),
-            ("treble_sparkle", Effect::SoundSpectrum), ("music_flow", Effect::SoundSpectrum),
+            ("spectrum_bars", Effect::SoundSpectrum), ("spectrum_analyzer", Effect::SoundSpectrum), ("vu_meter", Effect::SoundLevel),
+            ("treble_sparkle", Effect::SoundSparkle), ("music_flow", Effect::SoundSpectrum),
         ] {
             assert_eq!(Effect::parse(old), Some(new), "{old}");
         }

@@ -734,9 +734,9 @@ public sealed partial class MainWindow
                 random.Visibility = quickColor ? Visibility.Visible : Visibility.Collapsed;
                 preset.Visibility = kind == "preset" ? Visibility.Visible : Visibility.Collapsed;
                 lightingPanel.Visibility = kind == "lighting" ? Visibility.Visible : Visibility.Collapsed;
-                split.Visibility = audio ? Visibility.Visible : Visibility.Collapsed;
-                palette.Visibility = split.Visibility;
-                paletteTip.Visibility = split.Visibility;
+                split.Visibility = audio && UsesSplit(fx.Id) ? Visibility.Visible : Visibility.Collapsed;
+                palette.Visibility = audio ? Visibility.Visible : Visibility.Collapsed;
+                paletteTip.Visibility = palette.Visibility;
                 paletteTip.Text = SoundPalettes[Math.Max(0, palette.SelectedIndex)].Tip + ".";
                 colors.Visibility = audio && pal == "random" ? Visibility.Visible : Visibility.Collapsed;
                 speed.Header = audio ? "Sensitivity" : "Speed";
@@ -754,6 +754,7 @@ public sealed partial class MainWindow
                     r.Root.Visibility = !all && r.Box.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
                     // A sound effect: each device can have its own "lights per" and colors.
                     r.SoundPanel.Visibility = audio ? Visibility.Visible : Visibility.Collapsed;
+                    r.Split.Visibility = UsesSplit(fx.Id) ? Visibility.Visible : Visibility.Collapsed;
                 }
                 var none = !all && !rows.Any(r => r.Box.IsChecked == true) && !groups.Any(g => g.Box.IsChecked == true) && kept.Count == 0;
                 devicesNote.Text = none ? "No device yet: add the devices that show this effect."
@@ -1194,7 +1195,10 @@ public sealed partial class MainWindow
                 {
                     parts.Add("reacts to the sound LightSync hears");
                     parts.Add($"colors: {SoundPalettes[Math.Max(0, b.Palette.SelectedIndex)].Name.ToLowerInvariant()}");
-                    parts.Add($"lights per {Splits[Math.Max(0, b.Split.SelectedIndex)].Name.ToLowerInvariant()}");
+                    if (UsesSplit(fx.Id))
+                    {
+                        parts.Add($"lights per {Splits[Math.Max(0, b.Split.SelectedIndex)].Name.ToLowerInvariant()}");
+                    }
                 }
                 else
                 {

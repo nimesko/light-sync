@@ -16,11 +16,11 @@ else; it has only been tested on that one PC.
 |---|---|
 | All devices in one list | Devices, zones and fans together; hide what you don't use; split fan headers into single fans; groups |
 | 3D preview | A live 3D model of the case and desk in the current colors; drag parts to where they really are |
-| 28 effects | Calm, motion, colorful and alert effects, and Beat, Bass and Spectrum for sound, each with color, brightness and speed |
+| 35 effects | Calm, motion, colorful and alert effects (like Bounce, Confetti, Sunset and Beacon), and Beat, Bass, Spectrum, Level meter, Beat ripple and Sparkle for sound, each with color, brightness and speed |
 | Music sync | Lights per device (the device acts as one LED) or per LED; follows what Windows is playing (spectrum, bass, treble, beat, tempo, mood), even at a low volume; kicks, claps and hi-hats hit even in loud electronic music |
 | What's playing | A live spectrum of what it hears, and which app is playing it: the song, and for a browser the site (YouTube, YouTube Music, Spotify...) |
 | Sound colors | One color, random (a set number of colors or a random number on every beat), cold to hot, low to high, rainbow, fire or neon |
-| Triggers | A key press, a mouse click or movement, or one or more apps running or web sites open in a browser (like youtube.com, any of them) can play any mix of effects: a flash, pulse, ripple or glow, any of the 28 effects, or a preset, each on its own devices (whole devices or single keys and LEDs) or on all the others; priorities set from the list |
+| Triggers | A key press, a mouse click or movement, or one or more apps running or web sites open in a browser (like youtube.com, any of them) can play any mix of effects: a flash, pulse, ripple or glow, any of the 35 effects, or a preset, each on its own devices (whole devices or single keys and LEDs) or on all the others; priorities set from the list |
 | Trigger builder | Each trigger is built on a map: what sets it off, its effects and the devices each one lights; click a box to change it. A device can have its own sound settings ("lights per", colors), else it uses the effect's |
 | Presets | Save and load your lighting setups |
 | Power | Lights off on sleep, lock or when idle; start with Windows; lives in the tray |

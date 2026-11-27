@@ -7,7 +7,7 @@
 //! - `get_target { target }` -> the state that target currently shows
 //! - `set_state { target?, effect?, color?, brightness?, speed?, palette?, split?, colors? }` -> applied within one frame;
 //!   effects: see effects.rs (snake_case names, e.g. static, breathing, rainbow_wave, heartbeat);
-//!   sound reactive: sound_beat, sound_bass, sound_spectrum (sound is captured only while one of
+//!   sound reactive: sound_beat, sound_bass, sound_spectrum, sound_level, sound_ripple, sound_sparkle (sound is captured only while one of
 //!   them is visible; their `speed` is sensitivity, or how fast the beat fades); they take `split`
 //!   (device: the device acts as one LED, or led: each LED on its own), `palette` (effect = the chosen color, rainbow,
 //!   random, cold_hot, low_high, fire, neon) and `colors` (how many the random palette uses, 1..8,

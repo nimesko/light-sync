@@ -40,6 +40,7 @@ public sealed partial class MainWindow : Window
         new("rain", "Rain", true, Group: Motion),
         new("meteor_shower", "Meteor shower", true, Group: Motion),
         new("digital_rain", "Digital rain", true, Group: Motion),
+        new("bounce", "Bounce", true, Group: Motion),
         new("spectrum", "Spectrum", false, Group: Colorful),
         new("rainbow_wave", "Rainbow wave", false, Group: Colorful),
         new("plasma", "Plasma", false, Group: Colorful),
@@ -49,13 +50,19 @@ public sealed partial class MainWindow : Window
         new("ocean", "Ocean", false, Group: Colorful),
         new("lightning_storm", "Lightning storm", false, Group: Colorful),
         new("fireworks", "Fireworks", false, Group: Colorful),
+        new("confetti", "Confetti", false, Group: Colorful),
+        new("sunset", "Sunset", false, Group: Colorful),
         new("heartbeat", "Heartbeat", true, Group: Alerts),
         new("strobe", "Strobe", true, Group: Alerts),
         new("police", "Police", false, Group: Alerts),
+        new("beacon", "Beacon", true, Group: Alerts),
         // The sound effects: beat, bass or spectrum, with lights per device / zone / LED and their colors.
         new("sound_beat", "Beat", true, Audio: true, Group: Sound),
         new("sound_bass", "Bass", true, Audio: true, Group: Sound),
         new("sound_spectrum", "Spectrum", true, Audio: true, Group: Sound),
+        new("sound_level", "Level meter", true, Audio: true, Group: Sound),
+        new("sound_ripple", "Beat ripple", true, Audio: true, Group: Sound),
+        new("sound_sparkle", "Sparkle", true, Audio: true, Group: Sound),
     ];
     private static EffectOption EffectById(string id) => Effects.FirstOrDefault(e => e.Id == id) ?? Effects[0];
 
@@ -613,9 +620,12 @@ public sealed partial class MainWindow : Window
 
     private bool _syncingColorCount;
 
+    /// <summary>Sound effects that light per device or per LED ("Lights per"); the others run along each device's LEDs.</summary>
+    private static bool UsesSplit(string effect) => effect is "sound_beat" or "sound_bass" or "sound_spectrum";
+
     private void ShowSoundOptions(EffectOption effect)
     {
-        var split = effect.Audio;
+        var split = effect.Audio && UsesSplit(effect.Id);
         SoundOptions.Visibility = split ? Visibility.Visible : Visibility.Collapsed;
         foreach (var (id, b) in _splitButtons)
         {
@@ -628,7 +638,7 @@ public sealed partial class MainWindow : Window
             (_, "device") => "Each device acts as one LED: the whole device shows one color.",
             _ => "Every LED of every device is handled on its own: its own color and brightness.",
         };
-        ColorCountPanel.Visibility = split && _palette == "random" ? Visibility.Visible : Visibility.Collapsed;
+        ColorCountPanel.Visibility = effect.Audio && _palette == "random" ? Visibility.Visible : Visibility.Collapsed;
         _syncingColorCount = true;
         ColorCountBox.SelectedIndex = Math.Clamp(_colors, 0, 8);
         _syncingColorCount = false;
@@ -2179,6 +2189,13 @@ public sealed partial class MainWindow : Window
         "scanner" => Gradient(Stops(Dim(c, 0.03), Dim(c, 0.03), Dim(c, 0.3), c, Dim(c, 0.3), Dim(c, 0.03), Dim(c, 0.03))),
         "lightning_storm" => Gradient(Stops(Color.FromArgb(255, 5, 10, 35), Color.FromArgb(255, 10, 15, 45), Color.FromArgb(255, 220, 230, 255), Color.FromArgb(255, 60, 70, 120), Color.FromArgb(255, 5, 10, 35))),
         "neon_pulse" => Gradient(Stops(c, Dim(c, 0.2), ShiftHue(c, 0.5), Dim(ShiftHue(c, 0.5), 0.2), c)),
+        "bounce" => Gradient(Stops(Dim(c, 0.03), Dim(c, 0.03), c, Dim(c, 0.03), Dim(c, 0.03), Dim(c, 0.03))),
+        "confetti" => Gradient(Stops(Color.FromArgb(255, 10, 10, 10), Color.FromArgb(255, 255, 40, 120), Color.FromArgb(255, 10, 10, 10), Color.FromArgb(255, 40, 220, 255), Color.FromArgb(255, 10, 10, 10), Color.FromArgb(255, 255, 210, 30), Color.FromArgb(255, 10, 10, 10), Color.FromArgb(255, 120, 255, 60))),
+        "sunset" => Gradient(Stops(Color.FromArgb(255, 255, 190, 40), Color.FromArgb(255, 255, 110, 20), Color.FromArgb(255, 255, 40, 90), Color.FromArgb(255, 150, 30, 160), Color.FromArgb(255, 255, 110, 20))),
+        "beacon" => Gradient(Stops(Dim(c, 0.04), Dim(c, 0.3), c, Dim(c, 0.3), Dim(c, 0.04), Dim(c, 0.04))),
+        "sound_level" => Gradient(Stops(c, c, c, Dim(c, 0.6), Dim(c, 0.04), Dim(c, 0.04), Dim(c, 0.8), Dim(c, 0.04))),
+        "sound_ripple" => Gradient(Stops(Dim(c, 0.05), c, Dim(c, 0.1), Dim(c, 0.6), Dim(c, 0.1), c, Dim(c, 0.05))),
+        "sound_sparkle" => Gradient(Stops(Dim(c, 0.04), c, Dim(c, 0.04), Dim(c, 0.04), c, Dim(c, 0.04), c, Dim(c, 0.04))),
         _ => new SolidColorBrush(c),
     };
 

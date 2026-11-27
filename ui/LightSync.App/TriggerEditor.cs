@@ -236,7 +236,7 @@ public sealed partial class MainWindow
     /// sets it off, click an effect to pick it and its devices, add more effects for other devices. Save
     /// stores it and keeps it open, Cancel drops a new one / undoes changes.
     /// </summary>
-    private FrameworkElement BuildTriggerEditor(TriggerInfo trigger, bool isNew)
+    private FrameworkElement BuildTriggerEditor(TriggerInfo trigger, bool isNew, Button save)
     {
         var existing = isNew ? null : trigger;
         var t = TriggerInfo.FromJson(trigger.ToJson()) ?? new TriggerInfo { Targets = [.. trigger.Targets] };
@@ -873,7 +873,8 @@ public sealed partial class MainWindow
             blocks.Add(NewBlock(state, want, targets, rest, own));
         }
 
-        var error = new TextBlock { Foreground = Res("SystemFillColorCriticalBrush"), Visibility = Visibility.Collapsed, TextWrapping = TextWrapping.Wrap };
+        // Shown at the top when Save (in the title) finds something missing.
+        var error = new TextBlock { Foreground = Res("SystemFillColorCriticalBrush"), Visibility = Visibility.Collapsed, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 0) };
 
         // ---------- the cards: "When", or the selected effect and its devices ----------
         var whenCard = StepCard(1, "When", "What sets it off.", source, keysPanel, button, levelPanel, appPanel, whenSound.Root);
@@ -928,26 +929,6 @@ public sealed partial class MainWindow
             Changed();
         };
 
-        var save = new Button { Content = "Save", Style = SettingsUi.Style("AccentButtonStyle") };
-        var cancel = new Button { Content = existing is null ? "Cancel" : "Undo changes" };
-        // Footer: cancel / save on the right, messages above.
-        var footer = new Grid { ColumnSpacing = 8 };
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        save.MinWidth = 96;
-        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { cancel, save } };
-        Grid.SetColumn(right, 2);
-        footer.Children.Add(right);
-        var footerCard = new Border
-        {
-            Padding = new Thickness(16, 12, 16, 12),
-            CornerRadius = new CornerRadius(8),
-            BorderThickness = new Thickness(1),
-            BorderBrush = Res("CardStrokeColorDefaultBrush"),
-            Background = Res("LayerOnMicaBaseAltFillColorDefaultBrush"),
-            Child = new StackPanel { Spacing = 8, Children = { error, footer } },
-        };
 
         // ---------- the map: when -> effects -> devices; click a box to change it ----------
         var map = new TriggerMap();
@@ -1136,7 +1117,7 @@ public sealed partial class MainWindow
         var form = new StackPanel
         {
             Spacing = 12,
-            Children = { nameCard, mapCard, whenCard, blockCard, devicesCard, footerCard },
+            Children = { error, nameCard, mapCard, whenCard, blockCard, devicesCard },
         };
 
         // Record keys: while "Record keys" is on, every key pressed in this editor is added (and does nothing else).
@@ -1418,18 +1399,6 @@ public sealed partial class MainWindow
             return null;
         }
 
-        cancel.Click += (_, _) =>
-        {
-            if (existing is null)
-            {
-                _editingTrigger = null;
-                ShowView(ShellView.Home);
-            }
-            else
-            {
-                BuildTriggerPane();
-            }
-        };
         save.Click += (_, _) => Safe("saving a trigger", async () =>
         {
             save.IsEnabled = false;

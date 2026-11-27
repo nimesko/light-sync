@@ -454,6 +454,9 @@ public sealed partial class MainWindow
         }
         var secondary = Res("TextFillColorSecondaryBrush");
         var caption = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        // Save sits in the title; changes not saved are dropped when another page or trigger opens.
+        var save = new Button { Content = "Save", Style = (Style)Application.Current.Resources["AccentButtonStyle"], MinWidth = 88, VerticalAlignment = VerticalAlignment.Center };
+        ToolTipService.SetToolTip(save, "Save this trigger (changes not saved are dropped when you open something else)");
 
         // Header: an icon for what sets it off, its name and summary with status chips, and its controls.
         // Icon and text on the first row; the controls on their own row below (the middle column can be narrow).
@@ -561,7 +564,14 @@ public sealed partial class MainWindow
                 VerticalAlignment = VerticalAlignment.Center,
             };
             ToolTipService.SetToolTip(priority, "Where triggers light the same LEDs at the same time, the one higher in the list wins.");
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { priority, up, down, on, delete } };
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { priority, up, down, on, delete, save } };
+            Grid.SetRow(actions, 1);
+            Grid.SetColumnSpan(actions, 2);
+            header.Children.Add(actions);
+        }
+        else
+        {
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Children = { save } };
             Grid.SetRow(actions, 1);
             Grid.SetColumnSpan(actions, 2);
             header.Children.Add(actions);
@@ -578,7 +588,7 @@ public sealed partial class MainWindow
         {
             listening.Add(_inputPlan is { Clicks: true, Moves: true } ? "mouse clicks and movement" : _inputPlan.Clicks ? "mouse clicks" : "mouse movement");
         }
-        TriggerPane.Children.Add(BuildTriggerEditor(t, _editingNew));
+        TriggerPane.Children.Add(BuildTriggerEditor(t, _editingNew, save));
         // Privacy, in a quiet note with a shield.
         var privacy = new Grid { ColumnSpacing = 10, Margin = new Thickness(4, 0, 4, 0) };
         privacy.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

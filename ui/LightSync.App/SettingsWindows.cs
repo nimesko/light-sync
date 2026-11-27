@@ -200,10 +200,9 @@ public sealed partial class MainWindow
         var pre = SettingsUi.Toggle(_settings.IncludePrereleases);
 
         var check = new Button { Content = "Check now" };
-        var noPrompt = SettingsUi.Toggle(await OpenRgbLauncher.NoPromptProgramAsync() is not null);
+        var noPrompt = SettingsUi.Toggle(_settings.OpenRgbWithoutPrompt);
         var reset = new Button { Content = "Reset OpenRGB..." };
         var folder = new HyperlinkButton { Content = "Open the OpenRGB folder", Padding = new Thickness(0, 4, 0, 4) };
-        var syncing = false;
 
 
         async Task RefreshStatusAsync()
@@ -317,27 +316,23 @@ public sealed partial class MainWindow
         });
         noPrompt.Toggled += (_, _) => w.Run("start without a prompt", async () =>
         {
-            if (syncing)
-            {
-                return;
-            }
             noPrompt.IsEnabled = false;
             var wanted = noPrompt.IsOn;
+            // Remembered either way: when on and set up later, the next prompt (starting or installing
+            // OpenRGB) sets it up.
+            _settings.OpenRgbWithoutPrompt = wanted;
+            OpenRgbLauncher.NoPromptWanted = wanted;
+            _settings.Save();
             var result = await OpenRgbLauncher.SetNoPromptAsync(wanted);
-            var actual = await OpenRgbLauncher.NoPromptProgramAsync() is not null;
-            if (result == ElevatedResult.Failed && wanted)
+            if (result == ElevatedResult.Failed && wanted && OpenRgbLauncher.Find() is { } openRgb)
             {
-                ShowNotice(InfoBarSeverity.Error, "Could not set that up", "Windows didn't create the OpenRGB tasks. Is OpenRGB installed?");
+                ShowNotice(InfoBarSeverity.Error, "Could not set that up", OpenRgbLauncher.CanRunWithoutPrompt(openRgb)
+                    ? "Windows didn't create the OpenRGB tasks. LightSync tries again the next time it asks for permission."
+                    : "Only an OpenRGB installed in Program Files can start without a prompt (install it from here to get one): a copy elsewhere could be swapped for another program.");
             }
             if (w.IsClosed)
             {
                 return;
-            }
-            if (actual != noPrompt.IsOn)
-            {
-                syncing = true;
-                noPrompt.IsOn = actual;
-                syncing = false;
             }
             noPrompt.IsEnabled = true;
         });
@@ -395,7 +390,7 @@ public sealed partial class MainWindow
         w.Add(SettingsUi.Card("Check for updates", "Look for a newer OpenRGB now.", check));
         w.Add(SettingsUi.Section("Permissions"));
         w.Add(SettingsUi.Card("Start without a permission prompt",
-            "OpenRGB needs administrator rights. Turning this on asks once, then LightSync starts, stops and restarts it without asking.", noPrompt));
+            "OpenRGB needs administrator rights. With this on (the default), Windows asks once, then LightSync starts, stops and restarts it without asking, after a restart too.", noPrompt));
         w.Add(SettingsUi.Section("Troubleshooting"));
         w.Add(SettingsUi.Card("Reset OpenRGB's configuration",
             "Deletes OpenRGB's own settings (device sizes, profiles, plugins) and restarts it, so it detects every device from scratch.", reset));

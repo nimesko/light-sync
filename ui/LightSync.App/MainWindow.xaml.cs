@@ -118,6 +118,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        OpenRgbLauncher.NoPromptWanted = _settings.OpenRgbWithoutPrompt;
         // Errors that were caught (and logged) show up as a notice instead of closing LightSync.
         CrashLog.Notify = (where, e) => DispatcherQueue.TryEnqueue(() =>
         {

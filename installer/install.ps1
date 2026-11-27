@@ -1,6 +1,8 @@
-# Installs LightSync for the current user (no administrator rights needed): the app and its lighting
-# service go to %LOCALAPPDATA%\Programs\LightSync, with Start menu and desktop shortcuts and an entry in
-# Settings > Apps that uninstalls it. Run by the setup .exe (build-release.ps1) next to LightSync.zip.
+# Installs LightSync for the current user: the app and its lighting service go to
+# %LOCALAPPDATA%\Programs\LightSync, with Start menu and desktop shortcuts and an entry in Settings > Apps
+# that uninstalls it. Run by the setup .exe (build-release.ps1) next to LightSync.zip. The install itself
+# needs no administrator rights; Windows asks once so that OpenRGB (which needs them) can start without
+# a prompt later, after a reboot too.
 #
 # Settings (%APPDATA%\LightSync) and the OpenRGB that LightSync manages (Program Files\LightSync) are
 # not touched, so an update keeps everything as it was.
@@ -38,6 +40,52 @@ function New-Shortcut([string]$path) {
     $s.IconLocation = "$exe,0"
     $s.Description = 'LightSync: one place for all your PC lighting'
     $s.Save()
+}
+
+function Set-OpenRgbNoPrompt {
+    # OpenRGB needs administrator rights. Ask Windows once, here, to let LightSync start it without a
+    # prompt (two scheduled tasks that run it with highest privileges for this user), so a reboot
+    # doesn't ask again. The same tasks LightSync itself sets up (OpenRgbLauncher); skipped when
+    # OpenRGB isn't installed yet (LightSync sets them up with its first prompt), when the tasks are
+    # already right, or when "Start OpenRGB without a prompt" was turned off.
+    $settings = Join-Path $env:APPDATA 'LightSync\app-settings.json'
+    if (Test-Path $settings) {
+        try {
+            if ((Get-Content $settings -Raw | ConvertFrom-Json).OpenRgbWithoutPrompt -eq $false) { return }
+        } catch { }
+    }
+    $programFiles = [Environment]::GetFolderPath('ProgramFiles')
+    # Only a copy in Program Files (only administrators can change it): a task that runs a program the
+    # user's own programs could replace would let them run anything as administrator.
+    $openrgb = @(
+        (Join-Path $programFiles 'LightSync\OpenRGB\OpenRGB.exe'),
+        (Join-Path $programFiles 'OpenRGB\OpenRGB.exe')
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $openrgb) { return }
+    $config = Join-Path $programFiles 'LightSync\OpenRGB-config'
+    # Must match OpenRgbLauncher.Arguments, or LightSync sets the tasks up again.
+    $arguments = "--server --server-host 127.0.0.1 --noautoconnect --startminimized --config `"$config`""
+    $task = Get-ScheduledTask -TaskPath '\LightSync\' -TaskName 'Start OpenRGB' -ErrorAction SilentlyContinue
+    if ($task -and $task.Actions[0].Execute -eq $openrgb -and $task.Actions[0].Arguments -eq $arguments -and (Test-Path $config)) { return }
+    $q = { param($s) "'" + ($s -replace "'", "''") + "'" }
+    $user = "$env:USERDOMAIN\$env:USERNAME"
+    $taskkill = Join-Path ([Environment]::SystemDirectory) 'taskkill.exe'
+    $script = @"
+New-Item -ItemType Directory -Path $(& $q $config) -Force | Out-Null
+`$p = New-ScheduledTaskPrincipal -UserId $(& $q $user) -LogonType Interactive -RunLevel Highest
+`$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+`$start = New-ScheduledTaskAction -Execute $(& $q $openrgb) -Argument $(& $q $arguments) -WorkingDirectory $(& $q (Split-Path -Parent $openrgb))
+`$stop = New-ScheduledTaskAction -Execute $(& $q $taskkill) -Argument '/IM OpenRGB.exe /F'
+Register-ScheduledTask -TaskPath '\LightSync\' -TaskName 'Start OpenRGB' -Action `$start -Principal `$p -Settings `$s -Description 'Started by LightSync: OpenRGB as administrator, without a prompt.' -Force | Out-Null
+Register-ScheduledTask -TaskPath '\LightSync\' -TaskName 'Stop OpenRGB' -Action `$stop -Principal `$p -Settings `$s -Description 'Run by LightSync to stop OpenRGB.' -Force | Out-Null
+"@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    try {
+        Start-Process $powershell -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded" -Verb RunAs -WindowStyle Hidden -Wait
+    } catch {
+        # Declined: LightSync asks again when it first starts OpenRGB.
+    }
 }
 
 try {
@@ -81,6 +129,9 @@ try {
     if ((Get-ItemProperty -Path $runKey -ErrorAction SilentlyContinue).LightSync) {
         Set-ItemProperty -Path $runKey -Name LightSync -Value "`"$exe`" --tray"
     }
+
+    # The one permission prompt: OpenRGB then starts without asking, after a reboot too.
+    Set-OpenRgbNoPrompt
 
     Start-Process $exe
     [System.Windows.Forms.MessageBox]::Show(

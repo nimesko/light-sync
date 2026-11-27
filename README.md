@@ -24,7 +24,7 @@ else; it has only been tested on that one PC.
 | Trigger builder | Each trigger is built on a map: what sets it off, its effects and the devices each one lights; click a box to change it. A device can have its own sound settings ("lights per", colors), else it uses the effect's |
 | Presets | Save and load your lighting setups |
 | Power | Lights off on sleep, lock or when idle; start with Windows; lives in the tray |
-| OpenRGB management | Starts, stops and updates OpenRGB for you, listening on this PC only |
+| OpenRGB management | Starts, stops and updates OpenRGB for you, listening on this PC only; Windows asks for administrator rights once (when installing), not on every start |
 
 | Device | Triggers |
 |---|---|

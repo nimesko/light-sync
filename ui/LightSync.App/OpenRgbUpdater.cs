@@ -185,7 +185,7 @@ public static class OpenRgbUpdater
     /// </summary>
     public static async Task<ElevatedResult> InstallAsync(Download download)
     {
-        var result = await OpenRgbLauncher.RunElevatedAsync(InstallScript(download));
+        var result = await OpenRgbLauncher.RunElevatedAsync(InstallScript(download, await OpenRgbLauncher.TasksIfWantedAsync(Path.Combine(OpenRgbLauncher.ManagedDir, "OpenRGB.exe"))));
         try
         {
             File.Delete(download.Zip);
@@ -203,7 +203,7 @@ public static class OpenRgbUpdater
     /// that end up running as administrator are exactly the ones downloaded. The previous copy is kept
     /// only until the new one is in place, and put back if the swap fails.
     /// </summary>
-    private static string InstallScript(Download d) => $$"""
+    private static string InstallScript(Download d, string tasks) => $$"""
         $ErrorActionPreference = 'Stop'
         $dst = {{OpenRgbLauncher.Quote(OpenRgbLauncher.ManagedDir)}}
         $prev = {{OpenRgbLauncher.Quote(OpenRgbLauncher.ManagedBackupDir)}}
@@ -231,6 +231,7 @@ public static class OpenRgbUpdater
         } finally {
             Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
         }
+        {{tasks}}
         {{OpenRgbLauncher.StartScript(Path.Combine(OpenRgbLauncher.ManagedDir, "OpenRGB.exe"))}}
         """;
 }
@@ -239,6 +240,8 @@ public static class OpenRgbUpdater
 public sealed class AppSettings
 {
     public bool AutoUpdateOpenRgb { get; set; } = true;
+    /// <summary>Start OpenRGB through the no-prompt tasks (set up with the first permission prompt).</summary>
+    public bool OpenRgbWithoutPrompt { get; set; } = true;
     public bool IncludePrereleases { get; set; }
     public DateTimeOffset? LastUpdateCheck { get; set; }
     public bool LightsOffOnSleep { get; set; } = true;

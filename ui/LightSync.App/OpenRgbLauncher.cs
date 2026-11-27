@@ -89,9 +89,9 @@ public static class OpenRgbLauncher
         {
             return await WaitForServerAsync(wait);
         }
-        // One prompt. If the no-prompt tasks exist but are out of date (other program, arguments or
-        // a missing settings folder), the same prompt brings them up to date.
-        var script = (await NoPromptProgramAsync() is not null ? TasksScript(exe) + "\n" : "") + StartScript(exe);
+        // One prompt, which also sets up (or brings up to date) the no-prompt tasks: the next starts,
+        // after a reboot too, need none.
+        var script = await TasksIfWantedAsync(exe) + StartScript(exe);
         return await RunElevatedAsync(script) switch
         {
             ElevatedResult.Declined => OpenRgbStartResult.Declined,
@@ -176,7 +176,7 @@ public static class OpenRgbLauncher
                 return await WaitForServerAsync(wait);
             }
         }
-        var tasks = await NoPromptProgramAsync() is not null ? TasksScript(exe) : "";
+        var tasks = await TasksIfWantedAsync(exe);
         var script = $"""
             Stop-Process -Name OpenRGB -Force -ErrorAction SilentlyContinue
             Start-Sleep -Milliseconds 800
@@ -214,6 +214,31 @@ public static class OpenRgbLauncher
     private const string StartTask = @"\LightSync\Start OpenRGB";
     private const string StopTask = @"\LightSync\Stop OpenRGB";
 
+    /// <summary>
+    /// Whether the next permission prompt also sets up the no-prompt tasks (the default; off when the
+    /// user turned "Start OpenRGB without a prompt" off). Set from the app settings at start.
+    /// </summary>
+    public static bool NoPromptWanted { get; set; } = true;
+
+    /// <summary>PowerShell for an elevated script: the no-prompt tasks for <paramref name="exe"/> when wanted (or already there), else nothing.</summary>
+    public static async Task<string> TasksIfWantedAsync(string exe) =>
+        CanRunWithoutPrompt(exe) && (NoPromptWanted || await NoPromptProgramAsync() is not null) ? TasksScript(exe) + "\n" : "";
+
+    /// <summary>
+    /// Whether <paramref name="exe"/> may be run as administrator without a prompt: only from a folder
+    /// that only administrators can change (Program Files). A copy anywhere the user's programs can
+    /// write (next to LightSync, a download folder) could be swapped for another program, which the
+    /// task would then run as administrator without asking.
+    /// </summary>
+    public static bool CanRunWithoutPrompt(string exe)
+    {
+        var full = Path.GetFullPath(exe);
+        return new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 }
+            .Select(Environment.GetFolderPath)
+            .Where(d => d.Length > 0)
+            .Any(d => full.StartsWith(Path.TrimEndingDirectorySeparator(Path.GetFullPath(d)) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>The program the start task runs, or null if the task doesn't exist.</summary>
     public static async Task<string?> NoPromptProgramAsync() => (await StartTaskActionAsync())?.Program;
 
@@ -235,6 +260,7 @@ public static class OpenRgbLauncher
 
     /// <summary>True if the tasks exist, start this copy of OpenRGB with today's arguments, and its settings folder exists.</summary>
     private static async Task<bool> NoPromptReadyAsync(string exe) =>
+        CanRunWithoutPrompt(exe) &&
         await StartTaskActionAsync() is { } action &&
         string.Equals(Path.GetFullPath(action.Program), Path.GetFullPath(exe), StringComparison.OrdinalIgnoreCase) &&
         action.Arguments == Arguments &&
@@ -252,7 +278,7 @@ public static class OpenRgbLauncher
                 """);
         }
         var exe = Find();
-        if (exe is null)
+        if (exe is null || !CanRunWithoutPrompt(exe))
         {
             return Task.FromResult(ElevatedResult.Failed);
         }
